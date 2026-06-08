@@ -343,6 +343,10 @@ def build_verify(excel):
         f"    ('{ch}', {cnt})," for ch, cnt in per.items()
     ).rstrip(",")
     headings = ",".join(f"'{ch}'" for ch in per.index)
+    # AC-6 payload keys (HTSNum, Chapter99, TariffType, CountryofOrigin) -- ALL 1,955 insert rows
+    ins_key_tuples = ["(" + ", ".join([q(r["HTSNum"]), q(r["Chapter99"]),
+                                       q(r["TariffType"]), q(r["CountryofOrigin"])]) + ")"
+                      for _, r in ins.iterrows()]
 
     v = f"""/* ============================================================
    US {US} -- Section 232 Metals (CSMS {CSMS}) -- VERIFICATION
@@ -356,6 +360,10 @@ def build_verify(excel):
      * AC-4 literal blanket "TariffType=232 AND EndEffDate='{END_DATE_VALUE}'"
        returns 179 updated + 50 inserted rows that legitimately share that end
        date. AC-4 is therefore verified here scoped to the 179 update keys.
+     * AC-6 literal blanket "TariffType=232 AND Chapter99=X" also counts rows
+       that already exist in these (existing) headings on QA/prod, inflating the
+       count. AC-6 is therefore verified here scoped to the INSERT payload keys
+       (@InsKeys): Present_from_payload must equal ExpectedCount.
 ============================================================ */
 
 SET NOCOUNT ON;
@@ -399,16 +407,29 @@ JOIN @StartKeys k ON t.HTSNum=k.HTSNum AND t.Chapter99=k.Chapter99 AND t.TariffT
    AND ISNULL(t.CountryofOrigin,'')=ISNULL(k.CountryofOrigin,'')
 WHERE t.StartEffDate = CAST(N'{START_DATE_VALUE}' AS datetime);
 
-/* ---- AC-6 : inserted record counts per Chapter 99 (TariffType 232) ---- */
+/* ---- AC-6 : inserted record counts per Chapter 99 (TariffType 232) ----
+   Scoped to the INSERT payload keys so pre-existing rows in these (existing)
+   headings on QA/prod do NOT inflate the count. Present_from_payload must
+   equal ExpectedCount; Total_in_heading is informational. */
 DECLARE @Expected TABLE (Chapter99 varchar(20), ExpectedCount int);
 INSERT INTO @Expected (Chapter99, ExpectedCount) VALUES
 {per_rows};
+
+DECLARE @InsKeys TABLE (HTSNum varchar(20), Chapter99 varchar(20), TariffType varchar(20), CountryofOrigin varchar(10));
+{chunked_insert("@InsKeys", "HTSNum, Chapter99, TariffType, CountryofOrigin", ins_key_tuples)}
+
 SELECT [AC] = 'AC-6 per-heading',
        e.Chapter99, e.ExpectedCount,
-       [ActualCount] = (SELECT COUNT(*) FROM dbo.tmdHTSAdditional t WITH (NOLOCK)
-                        WHERE t.TariffType='232' AND t.Chapter99 = e.Chapter99),
+       [Present_from_payload] = (SELECT COUNT(*) FROM dbo.tmdHTSAdditional t WITH (NOLOCK)
+                WHERE t.TariffType='232' AND t.Chapter99=e.Chapter99
+                  AND EXISTS (SELECT 1 FROM @InsKeys i WHERE i.HTSNum=t.HTSNum AND i.Chapter99=t.Chapter99
+                                AND i.TariffType=t.TariffType AND ISNULL(i.CountryofOrigin,'')=ISNULL(t.CountryofOrigin,''))),
+       [Total_in_heading] = (SELECT COUNT(*) FROM dbo.tmdHTSAdditional t WITH (NOLOCK)
+                WHERE t.TariffType='232' AND t.Chapter99=e.Chapter99),
        [Status] = CASE WHEN e.ExpectedCount = (SELECT COUNT(*) FROM dbo.tmdHTSAdditional t WITH (NOLOCK)
-                        WHERE t.TariffType='232' AND t.Chapter99 = e.Chapter99)
+                WHERE t.TariffType='232' AND t.Chapter99=e.Chapter99
+                  AND EXISTS (SELECT 1 FROM @InsKeys i WHERE i.HTSNum=t.HTSNum AND i.Chapter99=t.Chapter99
+                                AND i.TariffType=t.TariffType AND ISNULL(i.CountryofOrigin,'')=ISNULL(t.CountryofOrigin,'')))
                        THEN 'PASS' ELSE 'FAIL' END
 FROM @Expected e ORDER BY e.Chapter99;
 
@@ -448,7 +469,9 @@ SELECT
     ,[AC-6 per-heading] = CASE WHEN NOT EXISTS (
             SELECT 1 FROM @Expected e
             WHERE e.ExpectedCount <> (SELECT COUNT(*) FROM dbo.tmdHTSAdditional t WITH (NOLOCK)
-                                      WHERE t.TariffType='232' AND t.Chapter99=e.Chapter99)
+                                      WHERE t.TariffType='232' AND t.Chapter99=e.Chapter99
+                                        AND EXISTS (SELECT 1 FROM @InsKeys i WHERE i.HTSNum=t.HTSNum AND i.Chapter99=t.Chapter99
+                                                      AND i.TariffType=t.TariffType AND ISNULL(i.CountryofOrigin,'')=ISNULL(t.CountryofOrigin,'')))
         ) THEN 'PASS' ELSE 'FAIL' END
     ,[AC-6 section122=2] = CASE WHEN (
             SELECT COUNT(*) FROM dbo.tmdHTSAdditional WITH (NOLOCK)
@@ -471,11 +494,221 @@ def verify_keys(excel, sheet, var):
     return chunked_insert(var, "HTSNum, Chapter99, CountryofOrigin, TariffType", tuples)
 
 
+# predicate for the two malformed 9903.82.12 patterns (reused in guard / delete / AC-3)
+BROKEN_PRED = ("( (ISNULL(HTSNum,'') =  '' AND ISNULL(CountryofOrigin,'') IN ('BY','CU','KP','RU'))\n"
+               "         OR (ISNULL(HTSNum,'') <> '' AND ISNULL(CountryofOrigin,'') =  '') )")
+
+
+def build_rollback_test(excel):
+    """TEMP QA harness: apply all data ops + run AC verification inside ONE
+    transaction, then ROLLBACK. Nothing is persisted. Not a deploy artifact."""
+    ins = load(excel, "Inserts_tmdhtsadditional")
+    ue = load(excel, "Update_EndEffDate")
+    us = load(excel, "Update_StartEffDate")
+
+    ins_tuples = ["(" + ", ".join([q(r["HTSNum"]), q(r["Chapter99"]), q(r["CountryofOrigin"]),
+                                   qdt(r["StartEffDate"]), qdt(r["EndEffDate"]), q(r["TariffType"]),
+                                   q(r["TariffGroup"]), q(r["RequiredStatusCode"]), q(r["ValidationLevel"]),
+                                   qdt(r["ExportDate"])]) + ")" for _, r in ins.iterrows()]
+    end_tuples = ["(" + ", ".join([q(r["HTSNum"]), q(r["Chapter99"]), q(r["CountryofOrigin"]),
+                                   q(r["TariffType"]), qdt(r["New_EndEffDate"])]) + ")"
+                  for _, r in ue.iterrows()]
+    start_tuples = ["(" + ", ".join([q(r["HTSNum"]), q(r["Chapter99"]),
+                                     q(r["TariffType"]), qdt(r["New_StartEffDate"])]) + ")"
+                    for _, r in us.iterrows()]
+    ins_col_sql = ", ".join(f"[{c}]" for c in INSERT_COLS)
+
+    g = ins[ins["TariffType"].map(cell_str) == "232"].copy()
+    g["Chapter99"] = g["Chapter99"].map(cell_str)
+    per = g.groupby("Chapter99").size().sort_index()
+    per_rows = "\n".join(f"    ('{ch}', {cnt})," for ch, cnt in per.items()).rstrip(",")
+    headings = ",".join(f"'{ch}'" for ch in per.index)
+
+    # one re-usable block of the five data operations (used for pass 1 and pass 2)
+    def ops_block(d, s, e, i):
+        return f"""        SET @Broken = (SELECT COUNT(*) FROM dbo.tmdHTSAdditional WITH (NOLOCK)
+                       WHERE TariffType = '232' AND Chapter99 = '99038212' AND {BROKEN_PRED});
+        IF @Broken NOT IN (0, 51)
+            RAISERROR('R3a: expected 0 or 51 broken 9903.82.12 records, found %d.', 16, 1, @Broken);
+
+        DELETE FROM dbo.tmdHTSAdditional
+        WHERE TariffType = '232' AND Chapter99 = '99038212' AND {BROKEN_PRED};
+        SET {d} = @@ROWCOUNT;
+
+        UPDATE t SET t.StartEffDate = k.NewStartEffDate
+        FROM dbo.tmdHTSAdditional t
+        JOIN @StartKeys k ON t.HTSNum=k.HTSNum AND t.Chapter99=k.Chapter99 AND t.TariffType=k.TariffType
+        WHERE t.StartEffDate = CAST(N'2026-04-06 00:00:00' AS DATETIME);
+        SET {s} = @@ROWCOUNT;
+
+        UPDATE t SET t.EndEffDate = k.NewEndEffDate
+        FROM dbo.tmdHTSAdditional t
+        JOIN @EndKeys k ON t.HTSNum=k.HTSNum AND t.Chapter99=k.Chapter99 AND t.TariffType=k.TariffType
+           AND ISNULL(t.CountryofOrigin,'') = ISNULL(k.CountryofOrigin,'')
+        WHERE t.EndEffDate = CAST(N'9999-12-31 23:59:59' AS DATETIME);
+        SET {e} = @@ROWCOUNT;
+
+        INSERT INTO dbo.tmdHTSAdditional ({ins_col_sql})
+        SELECT i.HTSNum, i.Chapter99, i.CountryofOrigin, i.StartEffDate, i.EndEffDate,
+               i.TariffType, i.TariffGroup, i.RequiredStatusCode, i.ValidationLevel, i.ExportDate
+        FROM @Ins i
+        WHERE NOT EXISTS (SELECT 1 FROM dbo.tmdHTSAdditional t WITH (NOLOCK)
+            WHERE t.HTSNum=i.HTSNum AND t.Chapter99=i.Chapter99 AND t.TariffType=i.TariffType
+              AND ISNULL(t.CountryofOrigin,'') = ISNULL(i.CountryofOrigin,''));
+        SET {i} = @@ROWCOUNT;"""
+
+    return f"""/* ============================================================
+   *** TEMPORARY -- QA ROLLBACK TEST -- DO NOT COMMIT ***
+   US {US} -- Section 232 Metals (CSMS {CSMS})
+
+   Applies ALL data operations + runs the AC-1..AC-7 verification inside a
+   SINGLE transaction, then ALWAYS ROLLS BACK. Nothing is persisted.
+   Run against QA ONLY, in SSMS, and read the result grids.
+
+   Pass 1  = apply (expect deleted 51 / starteff 17 / endeff 179 / inserted 1955)
+   Pass 2  = re-run in the same tran to prove idempotency (expect all 0)
+   Then AC verification against the uncommitted state, then ROLLBACK.
+============================================================ */
+SET NOCOUNT ON;
+SET XACT_ABORT ON;
+
+DECLARE @BackupHTSTableName SYSNAME = N'{BACKUP}';
+DECLARE @TestIdempotency BIT = 1;        -- set 0 to skip the Pass-2 re-run
+DECLARE @Broken INT;
+DECLARE @Del1 INT=0,@Sta1 INT=0,@End1 INT=0,@Ins1 INT=0;
+DECLARE @Del2 INT=0,@Sta2 INT=0,@End2 INT=0,@Ins2 INT=0;
+
+IF OBJECT_ID('dbo.tmdHTSAdditional','U') IS NULL
+BEGIN RAISERROR('dbo.tmdHTSAdditional does not exist in this database.',16,1); RETURN; END
+
+/* ---- load the spreadsheet payload into table variables (not transactional) ---- */
+DECLARE @Ins TABLE (
+    HTSNum varchar(20), Chapter99 varchar(20), CountryofOrigin varchar(10),
+    StartEffDate datetime, EndEffDate datetime, TariffType varchar(20),
+    TariffGroup varchar(20), RequiredStatusCode varchar(1), ValidationLevel varchar(1), ExportDate datetime);
+{chunked_insert("@Ins", ins_col_sql, ins_tuples)}
+
+DECLARE @StartKeys TABLE (HTSNum varchar(20), Chapter99 varchar(20), TariffType varchar(20), NewStartEffDate datetime);
+{chunked_insert("@StartKeys", "HTSNum, Chapter99, TariffType, NewStartEffDate", start_tuples)}
+
+DECLARE @EndKeys TABLE (HTSNum varchar(20), Chapter99 varchar(20), CountryofOrigin varchar(10), TariffType varchar(20), NewEndEffDate datetime);
+{chunked_insert("@EndKeys", "HTSNum, Chapter99, CountryofOrigin, TariffType, NewEndEffDate", end_tuples)}
+
+DECLARE @Expected TABLE (Chapter99 varchar(20), ExpectedCount int);
+INSERT INTO @Expected (Chapter99, ExpectedCount) VALUES
+{per_rows};
+
+BEGIN TRY
+    BEGIN TRANSACTION;
+
+    /* ---- backup (created then rolled back; skipped if [bck] schema absent) ---- */
+    IF SCHEMA_ID('bck') IS NOT NULL AND OBJECT_ID(@BackupHTSTableName,'U') IS NULL
+    BEGIN
+        DECLARE @bsql nvarchar(max) = N'SELECT * INTO ' + @BackupHTSTableName + N' FROM dbo.tmdHTSAdditional WITH (NOLOCK)';
+        EXEC sys.sp_executesql @bsql;
+    END
+
+    /* ---- pre-apply snapshot: intended INSERTs that already exist (idempotent will skip these) ---- */
+    SELECT [PreApply]='intended INSERT rows already present in this DB (will be skipped by NOT EXISTS)',
+           [AlreadyPresent]=(SELECT COUNT(*) FROM @Ins i WHERE EXISTS (
+                SELECT 1 FROM dbo.tmdHTSAdditional t WITH (NOLOCK)
+                WHERE t.HTSNum=i.HTSNum AND t.Chapter99=i.Chapter99 AND t.TariffType=i.TariffType
+                  AND ISNULL(t.CountryofOrigin,'')=ISNULL(i.CountryofOrigin,''))),
+           [TotalIntended]=(SELECT COUNT(*) FROM @Ins);
+
+    -- which intended rows already exist (so 'Inserted' may be < TotalIntended)
+    SELECT TOP 200 [AlreadyPresent]=i.Chapter99, i.HTSNum, i.CountryofOrigin, i.TariffType
+    FROM @Ins i WHERE EXISTS (SELECT 1 FROM dbo.tmdHTSAdditional t WITH (NOLOCK)
+        WHERE t.HTSNum=i.HTSNum AND t.Chapter99=i.Chapter99 AND t.TariffType=i.TariffType
+          AND ISNULL(t.CountryofOrigin,'')=ISNULL(i.CountryofOrigin,''))
+    ORDER BY i.Chapter99, i.HTSNum;
+
+    /* ================= PASS 1 (apply) ================= */
+{ops_block("@Del1", "@Sta1", "@End1", "@Ins1")}
+
+    SELECT [Phase]='PASS 1 (applied, uncommitted)',
+           [BrokenFound]=@Broken, [Deleted]=@Del1, [StartEffUpd]=@Sta1, [EndEffUpd]=@End1, [Inserted]=@Ins1,
+           [Expected]='51 / 17 / 179 / 1955';
+
+    /* ================= PASS 2 (idempotency re-run; all should be 0) ================= */
+    IF @TestIdempotency = 1
+    BEGIN
+{ops_block("@Del2", "@Sta2", "@End2", "@Ins2")}
+
+        SELECT [Phase]='PASS 2 (idempotency re-run)',
+               [Deleted]=@Del2, [StartEffUpd]=@Sta2, [EndEffUpd]=@End2, [Inserted]=@Ins2,
+               [Idempotent]=CASE WHEN @Del2=0 AND @Sta2=0 AND @End2=0 AND @Ins2=0 THEN 'PASS' ELSE 'FAIL' END;
+    END
+
+    /* ================= AC VERIFICATION (uncommitted state) ================= */
+    DECLARE @BackupRows INT = NULL;
+    IF OBJECT_ID(@BackupHTSTableName,'U') IS NOT NULL
+    BEGIN
+        DECLARE @csql nvarchar(max)=N'SELECT @c=COUNT(*) FROM '+@BackupHTSTableName+N' WITH (NOLOCK)';
+        EXEC sys.sp_executesql @csql, N'@c INT OUTPUT', @c=@BackupRows OUTPUT;
+    END
+
+    SELECT
+         [AC-1/2 backup]   = CASE WHEN OBJECT_ID(@BackupHTSTableName,'U') IS NOT NULL THEN 'PASS' ELSE 'FAIL (bck schema?)' END
+        ,[BackupRowCount]  = @BackupRows
+        ,[AC-3 no-broken]  = CASE WHEN NOT EXISTS (SELECT 1 FROM dbo.tmdHTSAdditional WITH (NOLOCK)
+                                WHERE TariffType='232' AND Chapter99='99038212' AND {BROKEN_PRED}) THEN 'PASS' ELSE 'FAIL' END
+        ,[AC-4 endeff 179] = CASE WHEN (SELECT COUNT(*) FROM dbo.tmdHTSAdditional t WITH (NOLOCK)
+                                JOIN @EndKeys k ON t.HTSNum=k.HTSNum AND t.Chapter99=k.Chapter99 AND t.TariffType=k.TariffType
+                                   AND ISNULL(t.CountryofOrigin,'')=ISNULL(k.CountryofOrigin,'')
+                                WHERE t.EndEffDate=CAST(N'{END_DATE_VALUE}' AS datetime)) = (SELECT COUNT(*) FROM @EndKeys)
+                              THEN 'PASS' ELSE 'FAIL' END
+        ,[AC-5 starteff 17]= CASE WHEN (SELECT COUNT(*) FROM dbo.tmdHTSAdditional t WITH (NOLOCK)
+                                JOIN @StartKeys k ON t.HTSNum=k.HTSNum AND t.Chapter99=k.Chapter99 AND t.TariffType=k.TariffType
+                                WHERE t.StartEffDate=CAST(N'{START_DATE_VALUE}' AS datetime)) = (SELECT COUNT(*) FROM @StartKeys)
+                              THEN 'PASS' ELSE 'FAIL' END
+        ,[AC-6 per-heading]= CASE WHEN NOT EXISTS (SELECT 1 FROM @Expected e
+                                WHERE e.ExpectedCount <> (SELECT COUNT(*) FROM dbo.tmdHTSAdditional t WITH (NOLOCK)
+                                                          WHERE t.TariffType='232' AND t.Chapter99=e.Chapter99
+                                                            AND EXISTS (SELECT 1 FROM @Ins i WHERE i.HTSNum=t.HTSNum AND i.Chapter99=t.Chapter99
+                                                                          AND i.TariffType=t.TariffType AND ISNULL(i.CountryofOrigin,'')=ISNULL(t.CountryofOrigin,''))))
+                              THEN 'PASS' ELSE 'FAIL' END
+        ,[AC-6 section122] = CASE WHEN (SELECT COUNT(*) FROM dbo.tmdHTSAdditional WITH (NOLOCK)
+                                WHERE TariffType='122' AND Chapter99='99030306' AND HTSNum IN ('37013000','9403999040'))=2
+                              THEN 'PASS' ELSE 'FAIL' END
+        ,[AC-7 no-dupes]   = CASE WHEN NOT EXISTS (SELECT 1 FROM dbo.tmdHTSAdditional t WITH (NOLOCK)
+                                WHERE t.Chapter99 IN ({headings},'99030306')
+                                GROUP BY t.HTSNum,t.Chapter99,t.TariffType,ISNULL(t.CountryofOrigin,'')
+                                HAVING COUNT(*)>1) THEN 'PASS' ELSE 'FAIL' END;
+
+    -- per-heading detail: Present_from_payload (must = Expected) vs Total_in_heading (incl. pre-existing QA data)
+    SELECT [AC-6 detail]=e.Chapter99, e.ExpectedCount,
+           [Present_from_payload]=(SELECT COUNT(*) FROM dbo.tmdHTSAdditional t WITH (NOLOCK)
+                WHERE t.TariffType='232' AND t.Chapter99=e.Chapter99
+                  AND EXISTS (SELECT 1 FROM @Ins i WHERE i.HTSNum=t.HTSNum AND i.Chapter99=t.Chapter99
+                                AND i.TariffType=t.TariffType AND ISNULL(i.CountryofOrigin,'')=ISNULL(t.CountryofOrigin,''))),
+           [Total_in_heading]=(SELECT COUNT(*) FROM dbo.tmdHTSAdditional t WITH (NOLOCK) WHERE t.TariffType='232' AND t.Chapter99=e.Chapter99)
+    FROM @Expected e ORDER BY e.Chapter99;
+
+    /* ================= INTENTIONAL ROLLBACK ================= */
+    IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
+    PRINT '*** ROLLED BACK -- no changes were persisted to this database. ***';
+END TRY
+BEGIN CATCH
+    IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
+    SELECT [Phase]='ERROR (rolled back)', [ErrLine]=ERROR_LINE(), [ErrMsg]=ERROR_MESSAGE();
+END CATCH;
+
+/* ---- post-rollback proof: on a clean QA both should be 0 ---- */
+SELECT [PostRollbackProof]='expect 0 on clean QA (proves nothing persisted)',
+       [Backup_exists]      = CASE WHEN OBJECT_ID(@BackupHTSTableName,'U') IS NOT NULL THEN 1 ELSE 0 END,
+       [NewHeading_99038222]= (SELECT COUNT(*) FROM dbo.tmdHTSAdditional WITH (NOLOCK)
+                               WHERE TariffType='232' AND Chapter99='99038222');
+"""
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--excel", default=EXCEL_DEFAULT)
     ap.add_argument("--out-script", default=f"V26.3.XXXX__DATA_tmdHTSAdditional_232_Metals_CSMS{CSMS}.sql")
     ap.add_argument("--out-verify", default=f"VERIFY_tmdHTSAdditional_232_Metals_US{US}.sql")
+    ap.add_argument("--out-test", default=None,
+                    help="If set, also emit the TEMP QA rollback-test harness to this path.")
     args = ap.parse_args()
 
     script, counts = build_main(args.excel)
@@ -488,6 +721,12 @@ def main():
 
     print(f"Deploy script : {args.out_script}")
     print(f"Verify script : {args.out_verify}")
+
+    if args.out_test:
+        with open(args.out_test, "w", encoding="utf-8") as f:
+            f.write(build_rollback_test(args.excel))
+        print(f"QA test (TEMP): {args.out_test}")
+
     print(f"Counts -> inserts={counts['ins']} endeff={counts['end']} starteff={counts['start']}")
 
 
