@@ -3,7 +3,7 @@
    ACCEPTANCE-CRITERIA QUERIES (read-only).  Run AFTER the deploy script.
    All SELECTs use WITH (NOLOCK).  Every roll-up column should read 'PASS'.
 
-   NOTE on AC-3 / AC-4 literal wording vs. data:
+   NOTE on AC-3 / AC-4 / AC-6 literal wording vs. data:
      * AC-3 literal "count of 99038212/232 = 0" only holds on the FIRST run
        BEFORE the insert step. Post-script the heading legitimately holds 344
        correct rows, so AC-3 is verified here as "0 BROKEN-pattern rows remain".
@@ -13,33 +13,33 @@
      * AC-6 literal blanket "TariffType=232 AND Chapter99=X" also counts rows
        that already exist in these (existing) headings on QA/prod, inflating the
        count. AC-6 is therefore verified here scoped to the INSERT payload keys
-       (@InsKeys): Present_from_payload must equal ExpectedCount.
+       (@v_InsKeys): Present_from_payload must equal ExpectedCount.
 ============================================================ */
 
 SET NOCOUNT ON;
 DECLARE @BackupHTSTableName SYSNAME = N'[bck].[bck_tmdHTSAdditional_Backup_US_5462916]';
 
 /* ---- AC-1 / AC-2 : backup exists and is the single snapshot ---- */
-DECLARE @BackupRows INT = NULL;
+DECLARE @v_BackupRows INT = NULL;
 IF OBJECT_ID(@BackupHTSTableName,'U') IS NOT NULL
 BEGIN
-    DECLARE @sql nvarchar(max) = N'SELECT @c = COUNT(*) FROM ' + @BackupHTSTableName + N' WITH (NOLOCK)';
-    EXEC sys.sp_executesql @sql, N'@c INT OUTPUT', @c = @BackupRows OUTPUT;
+    DECLARE @v_sql nvarchar(max) = N'SELECT @c = COUNT(*) FROM ' + @BackupHTSTableName + N' WITH (NOLOCK)';
+    EXEC sys.sp_executesql @v_sql, N'@c INT OUTPUT', @c = @v_BackupRows OUTPUT;
 END
 SELECT [AC] = 'AC-1/AC-2', [BackupTable] = @BackupHTSTableName,
        [BackupExists] = CASE WHEN OBJECT_ID(@BackupHTSTableName,'U') IS NOT NULL THEN 1 ELSE 0 END,
-       [BackupRowCount] = @BackupRows;   -- record; must be unchanged on re-runs
+       [BackupRowCount] = @v_BackupRows;   -- record; must be unchanged on re-runs
 
 /* ---- AC-3 : no BROKEN 9903.82.12 rows remain (EXPECTED 0) ---- */
 SELECT [AC] = 'AC-3 broken-remaining', [BrokenRemaining] = COUNT(*)
 FROM dbo.tmdHTSAdditional WITH (NOLOCK)
 WHERE TariffType = '232' AND Chapter99 = '99038212'
   AND ( (ISNULL(HTSNum,'') =  '' AND ISNULL(CountryofOrigin,'') IN ('BY','CU','KP','RU'))
-     OR (ISNULL(HTSNum,'') <> '' AND ISNULL(CountryofOrigin,'') =  '') );
+         OR (ISNULL(HTSNum,'') <> '' AND ISNULL(CountryofOrigin,'') =  '') );
 
-/* ---- AC-4 : the 179 update-target rows now carry EndEffDate '2026-06-07 23:59:59' ---- */
-DECLARE @EndKeys TABLE (HTSNum varchar(20), Chapter99 varchar(20), CountryofOrigin varchar(10), TariffType varchar(20));
-    INSERT INTO @EndKeys (HTSNum, Chapter99, CountryofOrigin, TariffType) VALUES
+/* ---- AC-4 : the update-target rows now carry EndEffDate '2026-06-07 23:59:59' ---- */
+DECLARE @v_EndKeys TABLE (HTSNum varchar(20), Chapter99 varchar(20), CountryofOrigin varchar(10), TariffType varchar(20));
+    INSERT INTO @v_EndKeys (HTSNum, Chapter99, CountryofOrigin, TariffType) VALUES
         (N'87082921', N'99038203', N'', N'232'),
         (N'87082921', N'99038201', N'', N'232'),
         (N'84079010', N'99038205', N'', N'232'),
@@ -219,16 +219,16 @@ DECLARE @EndKeys TABLE (HTSNum varchar(20), Chapter99 varchar(20), CountryofOrig
         (N'87089923', N'99038216', N'RU', N'232'),
         (N'87168010', N'99038216', N'RU', N'232'),
         (N'87169010', N'99038216', N'RU', N'232');
-SELECT [AC] = 'AC-4 endeff', [Expected] = (SELECT COUNT(*) FROM @EndKeys),
+SELECT [AC] = 'AC-4 endeff', [Expected] = (SELECT COUNT(*) FROM @v_EndKeys),
        [MatchedWithNewDate] = COUNT(*)
 FROM dbo.tmdHTSAdditional t WITH (NOLOCK)
-JOIN @EndKeys k ON t.HTSNum=k.HTSNum AND t.Chapter99=k.Chapter99 AND t.TariffType=k.TariffType
+JOIN @v_EndKeys k ON t.HTSNum=k.HTSNum AND t.Chapter99=k.Chapter99 AND t.TariffType=k.TariffType
    AND ISNULL(t.CountryofOrigin,'')=ISNULL(k.CountryofOrigin,'')
 WHERE t.EndEffDate = CAST(N'2026-06-07 23:59:59' AS datetime);
 
-/* ---- AC-5 : the 17 update-target rows now carry StartEffDate '2026-06-08 00:00:00' ---- */
-DECLARE @StartKeys TABLE (HTSNum varchar(20), Chapter99 varchar(20), CountryofOrigin varchar(10), TariffType varchar(20));
-    INSERT INTO @StartKeys (HTSNum, Chapter99, CountryofOrigin, TariffType) VALUES
+/* ---- AC-5 : the update-target rows now carry StartEffDate '2026-06-08 00:00:00' ---- */
+DECLARE @v_StartKeys TABLE (HTSNum varchar(20), Chapter99 varchar(20), CountryofOrigin varchar(10), TariffType varchar(20));
+    INSERT INTO @v_StartKeys (HTSNum, Chapter99, CountryofOrigin, TariffType) VALUES
         (N'85169050', N'99038201', N'', N'232'),
         (N'85169050', N'99038203', N'', N'232'),
         (N'84069040', N'99038209', N'', N'232'),
@@ -246,19 +246,19 @@ DECLARE @StartKeys TABLE (HTSNum varchar(20), Chapter99 varchar(20), CountryofOr
         (N'84559040', N'99038211', N'', N'232'),
         (N'84559080', N'99038211', N'', N'232'),
         (N'90139080', N'99038211', N'', N'232');
-SELECT [AC] = 'AC-5 starteff', [Expected] = (SELECT COUNT(*) FROM @StartKeys),
+SELECT [AC] = 'AC-5 starteff', [Expected] = (SELECT COUNT(*) FROM @v_StartKeys),
        [MatchedWithNewDate] = COUNT(*)
 FROM dbo.tmdHTSAdditional t WITH (NOLOCK)
-JOIN @StartKeys k ON t.HTSNum=k.HTSNum AND t.Chapter99=k.Chapter99 AND t.TariffType=k.TariffType
+JOIN @v_StartKeys k ON t.HTSNum=k.HTSNum AND t.Chapter99=k.Chapter99 AND t.TariffType=k.TariffType
    AND ISNULL(t.CountryofOrigin,'')=ISNULL(k.CountryofOrigin,'')
 WHERE t.StartEffDate = CAST(N'2026-06-08 00:00:00' AS datetime);
 
 /* ---- AC-6 : inserted record counts per Chapter 99 (TariffType 232) ----
-   Scoped to the INSERT payload keys so pre-existing rows in these (existing)
-   headings on QA/prod do NOT inflate the count. Present_from_payload must
-   equal ExpectedCount; Total_in_heading is informational. */
-DECLARE @Expected TABLE (Chapter99 varchar(20), ExpectedCount int);
-INSERT INTO @Expected (Chapter99, ExpectedCount) VALUES
+   Scoped to the INSERT payload keys (@v_InsKeys) so pre-existing rows in these
+   (existing) headings on QA/prod do NOT inflate the count. Present_from_payload
+   must equal ExpectedCount; Total_in_heading is informational. */
+DECLARE @v_Expected TABLE (Chapter99 varchar(20), ExpectedCount int);
+INSERT INTO @v_Expected (Chapter99, ExpectedCount) VALUES
     ('99038201', 7),
     ('99038203', 7),
     ('99038205', 4),
@@ -276,8 +276,8 @@ INSERT INTO @Expected (Chapter99, ExpectedCount) VALUES
     ('99038221', 28),
     ('99038222', 1036);
 
-DECLARE @InsKeys TABLE (HTSNum varchar(20), Chapter99 varchar(20), TariffType varchar(20), CountryofOrigin varchar(10));
-    INSERT INTO @InsKeys (HTSNum, Chapter99, TariffType, CountryofOrigin) VALUES
+DECLARE @v_InsKeys TABLE (HTSNum varchar(20), Chapter99 varchar(20), TariffType varchar(20), CountryofOrigin varchar(10));
+    INSERT INTO @v_InsKeys (HTSNum, Chapter99, TariffType, CountryofOrigin) VALUES
         (N'37013000', N'99038203', N'232', N''),
         (N'9403200075', N'99038203', N'232', N''),
         (N'9403200082', N'99038203', N'232', N''),
@@ -1178,7 +1178,7 @@ DECLARE @InsKeys TABLE (HTSNum varchar(20), Chapter99 varchar(20), TariffType va
         (N'84293000', N'99038221', N'232', N''),
         (N'84294000', N'99038221', N'232', N''),
         (N'84295110', N'99038221', N'232', N'');
-    INSERT INTO @InsKeys (HTSNum, Chapter99, TariffType, CountryofOrigin) VALUES
+    INSERT INTO @v_InsKeys (HTSNum, Chapter99, TariffType, CountryofOrigin) VALUES
         (N'84295150', N'99038221', N'232', N''),
         (N'84295210', N'99038221', N'232', N''),
         (N'84295250', N'99038221', N'232', N''),
@@ -2079,7 +2079,7 @@ DECLARE @InsKeys TABLE (HTSNum varchar(20), Chapter99 varchar(20), TariffType va
         (N'87019350', N'99038222', N'232', N'PL'),
         (N'87019350', N'99038222', N'232', N'PT'),
         (N'87019350', N'99038222', N'232', N'RO');
-    INSERT INTO @InsKeys (HTSNum, Chapter99, TariffType, CountryofOrigin) VALUES
+    INSERT INTO @v_InsKeys (HTSNum, Chapter99, TariffType, CountryofOrigin) VALUES
         (N'87019350', N'99038222', N'232', N'SE'),
         (N'87019350', N'99038222', N'232', N'SI'),
         (N'87019350', N'99038222', N'232', N'SK'),
@@ -2240,16 +2240,16 @@ SELECT [AC] = 'AC-6 per-heading',
        e.Chapter99, e.ExpectedCount,
        [Present_from_payload] = (SELECT COUNT(*) FROM dbo.tmdHTSAdditional t WITH (NOLOCK)
                 WHERE t.TariffType='232' AND t.Chapter99=e.Chapter99
-                  AND EXISTS (SELECT 1 FROM @InsKeys i WHERE i.HTSNum=t.HTSNum AND i.Chapter99=t.Chapter99
+                  AND EXISTS (SELECT 1 FROM @v_InsKeys i WHERE i.HTSNum=t.HTSNum AND i.Chapter99=t.Chapter99
                                 AND i.TariffType=t.TariffType AND ISNULL(i.CountryofOrigin,'')=ISNULL(t.CountryofOrigin,''))),
        [Total_in_heading] = (SELECT COUNT(*) FROM dbo.tmdHTSAdditional t WITH (NOLOCK)
                 WHERE t.TariffType='232' AND t.Chapter99=e.Chapter99),
        [Status] = CASE WHEN e.ExpectedCount = (SELECT COUNT(*) FROM dbo.tmdHTSAdditional t WITH (NOLOCK)
                 WHERE t.TariffType='232' AND t.Chapter99=e.Chapter99
-                  AND EXISTS (SELECT 1 FROM @InsKeys i WHERE i.HTSNum=t.HTSNum AND i.Chapter99=t.Chapter99
+                  AND EXISTS (SELECT 1 FROM @v_InsKeys i WHERE i.HTSNum=t.HTSNum AND i.Chapter99=t.Chapter99
                                 AND i.TariffType=t.TariffType AND ISNULL(i.CountryofOrigin,'')=ISNULL(t.CountryofOrigin,'')))
                        THEN 'PASS' ELSE 'FAIL' END
-FROM @Expected e ORDER BY e.Chapter99;
+FROM @v_Expected e ORDER BY e.Chapter99;
 
 -- AC-6 Section 122 (EXPECTED 2)
 SELECT [AC] = 'AC-6 section122', [Count] = COUNT(*)
@@ -2268,27 +2268,26 @@ HAVING COUNT(*) > 1;
 SELECT
      [AC-3 no-broken] = CASE WHEN NOT EXISTS (
             SELECT 1 FROM dbo.tmdHTSAdditional WITH (NOLOCK)
-            WHERE TariffType='232' AND Chapter99='99038212'
-              AND ( (ISNULL(HTSNum,'')='' AND ISNULL(CountryofOrigin,'') IN ('BY','CU','KP','RU'))
-                 OR (ISNULL(HTSNum,'')<>'' AND ISNULL(CountryofOrigin,'')='') )
+            WHERE TariffType='232' AND Chapter99='99038212' AND ( (ISNULL(HTSNum,'') =  '' AND ISNULL(CountryofOrigin,'') IN ('BY','CU','KP','RU'))
+         OR (ISNULL(HTSNum,'') <> '' AND ISNULL(CountryofOrigin,'') =  '') )
         ) THEN 'PASS' ELSE 'FAIL' END
     ,[AC-4 endeff 179] = CASE WHEN (
             SELECT COUNT(*) FROM dbo.tmdHTSAdditional t WITH (NOLOCK)
-            JOIN @EndKeys k ON t.HTSNum=k.HTSNum AND t.Chapter99=k.Chapter99 AND t.TariffType=k.TariffType
+            JOIN @v_EndKeys k ON t.HTSNum=k.HTSNum AND t.Chapter99=k.Chapter99 AND t.TariffType=k.TariffType
                AND ISNULL(t.CountryofOrigin,'')=ISNULL(k.CountryofOrigin,'')
             WHERE t.EndEffDate = CAST(N'2026-06-07 23:59:59' AS datetime)
-        ) = (SELECT COUNT(*) FROM @EndKeys) THEN 'PASS' ELSE 'FAIL' END
+        ) = (SELECT COUNT(*) FROM @v_EndKeys) THEN 'PASS' ELSE 'FAIL' END
     ,[AC-5 starteff 17] = CASE WHEN (
             SELECT COUNT(*) FROM dbo.tmdHTSAdditional t WITH (NOLOCK)
-            JOIN @StartKeys k ON t.HTSNum=k.HTSNum AND t.Chapter99=k.Chapter99 AND t.TariffType=k.TariffType
+            JOIN @v_StartKeys k ON t.HTSNum=k.HTSNum AND t.Chapter99=k.Chapter99 AND t.TariffType=k.TariffType
                AND ISNULL(t.CountryofOrigin,'')=ISNULL(k.CountryofOrigin,'')
             WHERE t.StartEffDate = CAST(N'2026-06-08 00:00:00' AS datetime)
-        ) = (SELECT COUNT(*) FROM @StartKeys) THEN 'PASS' ELSE 'FAIL' END
+        ) = (SELECT COUNT(*) FROM @v_StartKeys) THEN 'PASS' ELSE 'FAIL' END
     ,[AC-6 per-heading] = CASE WHEN NOT EXISTS (
-            SELECT 1 FROM @Expected e
+            SELECT 1 FROM @v_Expected e
             WHERE e.ExpectedCount <> (SELECT COUNT(*) FROM dbo.tmdHTSAdditional t WITH (NOLOCK)
                                       WHERE t.TariffType='232' AND t.Chapter99=e.Chapter99
-                                        AND EXISTS (SELECT 1 FROM @InsKeys i WHERE i.HTSNum=t.HTSNum AND i.Chapter99=t.Chapter99
+                                        AND EXISTS (SELECT 1 FROM @v_InsKeys i WHERE i.HTSNum=t.HTSNum AND i.Chapter99=t.Chapter99
                                                       AND i.TariffType=t.TariffType AND ISNULL(i.CountryofOrigin,'')=ISNULL(t.CountryofOrigin,'')))
         ) THEN 'PASS' ELSE 'FAIL' END
     ,[AC-6 section122=2] = CASE WHEN (
