@@ -2251,17 +2251,21 @@ SELECT [AC] = 'AC-6 per-heading',
                        THEN 'PASS' ELSE 'FAIL' END
 FROM @v_Expected e ORDER BY e.Chapter99;
 
--- AC-6 Section 122 (EXPECTED 2)
+-- AC-6 Section 122 (EXPECTED 2) -- scoped to StartEffDate so an EXPIRED 9403999040
+-- record (defect 5463196) is not counted alongside the new period record.
 SELECT [AC] = 'AC-6 section122', [Count] = COUNT(*)
 FROM dbo.tmdHTSAdditional WITH (NOLOCK)
-WHERE TariffType = '122' AND Chapter99 = '99030306' AND HTSNum IN ('37013000','9403999040');
+WHERE TariffType = '122' AND Chapter99 = '99030306' AND HTSNum IN ('37013000','9403999040')
+  AND StartEffDate = CAST(N'2026-06-08 00:00:00' AS datetime);
 
-/* ---- AC-7 : no duplicates on the existence key for the affected headings ---- */
+/* ---- AC-7 : no duplicates on the existence key for the affected headings ----
+   Key includes StartEffDate (defect 5463196): expired + new period records for
+   the same (HTSNum,Chapter99,TariffType,COO) legitimately coexist and are NOT dupes. */
 SELECT [AC] = 'AC-7 duplicate', t.HTSNum, t.Chapter99, t.TariffType,
-       [COO] = ISNULL(t.CountryofOrigin,''), [Occurrences] = COUNT(*)
+       [COO] = ISNULL(t.CountryofOrigin,''), t.StartEffDate, [Occurrences] = COUNT(*)
 FROM dbo.tmdHTSAdditional t WITH (NOLOCK)
 WHERE t.Chapter99 IN ('99038201','99038203','99038205','99038206','99038207','99038208','99038209','99038210','99038211','99038212','99038215','99038216','99038217','99038220','99038221','99038222','99030306')
-GROUP BY t.HTSNum, t.Chapter99, t.TariffType, ISNULL(t.CountryofOrigin,'')
+GROUP BY t.HTSNum, t.Chapter99, t.TariffType, ISNULL(t.CountryofOrigin,''), t.StartEffDate
 HAVING COUNT(*) > 1;
 
 /* ---- Sign-off roll-up (every column should be 'PASS') ---- */
@@ -2293,10 +2297,11 @@ SELECT
     ,[AC-6 section122=2] = CASE WHEN (
             SELECT COUNT(*) FROM dbo.tmdHTSAdditional WITH (NOLOCK)
             WHERE TariffType='122' AND Chapter99='99030306' AND HTSNum IN ('37013000','9403999040')
+              AND StartEffDate = CAST(N'2026-06-08 00:00:00' AS datetime)
         ) = 2 THEN 'PASS' ELSE 'FAIL' END
     ,[AC-7 no-dupes] = CASE WHEN NOT EXISTS (
             SELECT 1 FROM dbo.tmdHTSAdditional t WITH (NOLOCK)
             WHERE t.Chapter99 IN ('99038201','99038203','99038205','99038206','99038207','99038208','99038209','99038210','99038211','99038212','99038215','99038216','99038217','99038220','99038221','99038222','99030306')
-            GROUP BY t.HTSNum, t.Chapter99, t.TariffType, ISNULL(t.CountryofOrigin,'')
+            GROUP BY t.HTSNum, t.Chapter99, t.TariffType, ISNULL(t.CountryofOrigin,''), t.StartEffDate
             HAVING COUNT(*) > 1
         ) THEN 'PASS' ELSE 'FAIL' END;

@@ -251,11 +251,12 @@ def data_ops_sql(P, del_v, sta_v, end_v, ins_v, declare=True):
     FROM @Ins i
     WHERE NOT EXISTS (
         SELECT 1 FROM dbo.tmdHTSAdditional t WITH (NOLOCK)
-        WHERE t.HTSNum     = i.HTSNum
-          AND t.Chapter99  = i.Chapter99
-          AND t.TariffType = i.TariffType
+        WHERE t.HTSNum       = i.HTSNum
+          AND t.Chapter99    = i.Chapter99
+          AND t.TariffType   = i.TariffType
           AND ISNULL(t.CountryofOrigin,'') = ISNULL(i.CountryofOrigin,'')
-    );
+          AND t.StartEffDate = i.StartEffDate   -- DEFECT 5463196: include StartEffDate so a new
+    );                                          -- period record is not skipped by an EXPIRED one
     SET {ins_v} = @@ROWCOUNT;"""
 
 
@@ -328,17 +329,21 @@ SELECT [AC] = 'AC-6 per-heading',
                        THEN 'PASS' ELSE 'FAIL' END
 FROM @v_Expected e ORDER BY e.Chapter99;
 
--- AC-6 Section 122 (EXPECTED 2)
+-- AC-6 Section 122 (EXPECTED 2) -- scoped to StartEffDate so an EXPIRED 9403999040
+-- record (defect 5463196) is not counted alongside the new period record.
 SELECT [AC] = 'AC-6 section122', [Count] = COUNT(*)
 FROM dbo.tmdHTSAdditional WITH (NOLOCK)
-WHERE TariffType = '122' AND Chapter99 = '99030306' AND HTSNum IN ('37013000','9403999040');
+WHERE TariffType = '122' AND Chapter99 = '99030306' AND HTSNum IN ('37013000','9403999040')
+  AND StartEffDate = CAST(N'{START_DATE_VALUE}' AS datetime);
 
-/* ---- AC-7 : no duplicates on the existence key for the affected headings ---- */
+/* ---- AC-7 : no duplicates on the existence key for the affected headings ----
+   Key includes StartEffDate (defect 5463196): expired + new period records for
+   the same (HTSNum,Chapter99,TariffType,COO) legitimately coexist and are NOT dupes. */
 SELECT [AC] = 'AC-7 duplicate', t.HTSNum, t.Chapter99, t.TariffType,
-       [COO] = ISNULL(t.CountryofOrigin,''), [Occurrences] = COUNT(*)
+       [COO] = ISNULL(t.CountryofOrigin,''), t.StartEffDate, [Occurrences] = COUNT(*)
 FROM dbo.tmdHTSAdditional t WITH (NOLOCK)
 WHERE t.Chapter99 IN ({P["headings"]},'99030306')
-GROUP BY t.HTSNum, t.Chapter99, t.TariffType, ISNULL(t.CountryofOrigin,'')
+GROUP BY t.HTSNum, t.Chapter99, t.TariffType, ISNULL(t.CountryofOrigin,''), t.StartEffDate
 HAVING COUNT(*) > 1;
 
 /* ---- Sign-off roll-up (every column should be 'PASS') ---- */
@@ -369,11 +374,12 @@ SELECT
     ,[AC-6 section122=2] = CASE WHEN (
             SELECT COUNT(*) FROM dbo.tmdHTSAdditional WITH (NOLOCK)
             WHERE TariffType='122' AND Chapter99='99030306' AND HTSNum IN ('37013000','9403999040')
+              AND StartEffDate = CAST(N'{START_DATE_VALUE}' AS datetime)
         ) = 2 THEN 'PASS' ELSE 'FAIL' END
     ,[AC-7 no-dupes] = CASE WHEN NOT EXISTS (
             SELECT 1 FROM dbo.tmdHTSAdditional t WITH (NOLOCK)
             WHERE t.Chapter99 IN ({P["headings"]},'99030306')
-            GROUP BY t.HTSNum, t.Chapter99, t.TariffType, ISNULL(t.CountryofOrigin,'')
+            GROUP BY t.HTSNum, t.Chapter99, t.TariffType, ISNULL(t.CountryofOrigin,''), t.StartEffDate
             HAVING COUNT(*) > 1
         ) THEN 'PASS' ELSE 'FAIL' END;"""
 
@@ -403,7 +409,10 @@ def build_main(P):
      5. INSERT new records  ({c['ins']} rows, WHERE NOT EXISTS)        -- AC-6 / R3d
 
    Execution order per R8: backup -> DELETE -> UPDATE StartEff -> UPDATE EndEff -> INSERT.
-   Existence key (idempotency): (HTSNum, Chapter99, TariffType, CountryofOrigin)
+   Existence key (idempotency): (HTSNum, Chapter99, TariffType, CountryofOrigin, StartEffDate)
+     -- StartEffDate added per defect 5463196: the story's 4-col key (R3d/AC-7)
+        wrongly matched an EXPIRED record (e.g. 9403999040/99030306/122) and
+        skipped the new period record. Period-based records require StartEffDate.
    Blank HTSNum / CountryofOrigin are stored as '' (empty string); all key
    matching is ISNULL(...,'') NULL-safe per the work-item clarification.
    All SELECTs use WITH (NOLOCK).  Manual verification only (AC-8).

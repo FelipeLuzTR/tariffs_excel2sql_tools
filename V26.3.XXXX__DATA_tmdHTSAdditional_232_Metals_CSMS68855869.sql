@@ -19,7 +19,10 @@
      5. INSERT new records  (1955 rows, WHERE NOT EXISTS)        -- AC-6 / R3d
 
    Execution order per R8: backup -> DELETE -> UPDATE StartEff -> UPDATE EndEff -> INSERT.
-   Existence key (idempotency): (HTSNum, Chapter99, TariffType, CountryofOrigin)
+   Existence key (idempotency): (HTSNum, Chapter99, TariffType, CountryofOrigin, StartEffDate)
+     -- StartEffDate added per defect 5463196: the story's 4-col key (R3d/AC-7)
+        wrongly matched an EXPIRED record (e.g. 9403999040/99030306/122) and
+        skipped the new period record. Period-based records require StartEffDate.
    Blank HTSNum / CountryofOrigin are stored as '' (empty string); all key
    matching is ISNULL(...,'') NULL-safe per the work-item clarification.
    All SELECTs use WITH (NOLOCK).  Manual verification only (AC-8).
@@ -2309,11 +2312,12 @@ BEGIN TRY
     FROM @Ins i
     WHERE NOT EXISTS (
         SELECT 1 FROM dbo.tmdHTSAdditional t WITH (NOLOCK)
-        WHERE t.HTSNum     = i.HTSNum
-          AND t.Chapter99  = i.Chapter99
-          AND t.TariffType = i.TariffType
+        WHERE t.HTSNum       = i.HTSNum
+          AND t.Chapter99    = i.Chapter99
+          AND t.TariffType   = i.TariffType
           AND ISNULL(t.CountryofOrigin,'') = ISNULL(i.CountryofOrigin,'')
-    );
+          AND t.StartEffDate = i.StartEffDate   -- DEFECT 5463196: include StartEffDate so a new
+    );                                          -- period record is not skipped by an EXPIRED one
     SET @InsertedHTS = @@ROWCOUNT;
 
     COMMIT TRANSACTION;
