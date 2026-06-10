@@ -103,11 +103,38 @@ def build_htsadditional(src):
                meta, columns, operations, tabs)
 
 
+def build_template():
+    """A blank, structured starter workbook -- copy it and fill in your own change."""
+    meta = [
+        ["TargetTable", "dbo.<YourTable>"], ["StoryId", "<ADO story id>"],
+        ["Feature", "<feature_slug e.g. 232_Metals_CSMS00000000>"], ["Release", "26.x"],
+        ["EffectiveDate", "YYYY-MM-DD 00:00:00"], ["RetireDate", "(optional) YYYY-MM-DD 23:59:59"],
+        ["BackupSchema", "bck"], ["PartnerScoped", "N  (Y if the table has PartnerID)"],
+        ["PartnerSource", "(if PartnerScoped=Y) SELECT TOP 1 PartnerID FROM dbo.tmfDefaults WITH (NOLOCK)"],
+        ["NeverDelete", "N"],
+    ]
+    columns = [
+        {"ColumnName": "<Col1>", "SqlType": "varchar(20)", "Source": "CELL", "NullNormalize": "Y if blanks allowed"},
+        {"ColumnName": "<Col2>", "SqlType": "datetime", "Source": "PARAM:EffectiveDate", "NullNormalize": ""},
+        {"ColumnName": "<Col3>", "SqlType": "char(1)", "Source": "CONST:Y", "NullNormalize": ""},
+        {"ColumnName": "<Col4>", "SqlType": "nvarchar(36)", "Source": "ECHO:<Col1>", "NullNormalize": ""},
+    ]
+    operations = [{
+        "Order": 1, "ActionTab": "MyInserts", "ActionFilter": "Insert", "OpType": "INSERT (or UPDATE / DELETE)",
+        "MatchKey": "<comma,separated,key,columns>", "FromPredicate": "(UPDATE/DELETE only)",
+        "SetMap": "(UPDATE only) Col <- CELL(New_Col)", "Idempotency": "NOT_EXISTS (or GUARDED / PATTERN)",
+        "VerifyGroupBy": "(optional) column to group expected counts by",
+    }]
+    action = pd.DataFrame([["Insert", "<value>", "<value>"]], columns=["Action", "<Col1>", "<Col2>"])
+    write_book(os.path.join(SAMPLES, "TEMPLATE.xlsx"), meta, columns, operations, {"MyInserts": action})
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--hts-source", help="work-item source workbook for the tmdHTSAdditional sample")
     args = ap.parse_args()
     os.makedirs(SAMPLES, exist_ok=True)
+    build_template()
     build_globalcodes()
     if args.hts_source:
         build_htsadditional(args.hts_source)

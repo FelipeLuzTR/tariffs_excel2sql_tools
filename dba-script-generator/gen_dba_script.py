@@ -6,10 +6,10 @@ Reads ONE standardized Excel workbook (control sheets _Meta / _Columns /
 _Operations + action data tabs) and emits THREE artifacts from two shared
 builders (single source of truth):
 
-  * deploy  = preamble + guards + BEGIN TRAN + ops_body()            + COMMIT
-  * verify  = preamble + verification_body()
-  * harness = preamble + guards + BEGIN TRAN + ops_body() [x2 idempotency]
-                       + verification_body() + ROLLBACK    (nothing persisted)
+  * deploy   = preamble + guards + BEGIN TRAN + ops_body()            + COMMIT
+  * verify   = preamble + verification_body()
+  * dev-test = preamble + guards + BEGIN TRAN + ops_body() [x2 idempotency]
+                        + verification_body() + ROLLBACK   (nothing persisted)
 
 Covers both anchor shapes with one engine:
   * tmgGlobalCodes (US 5463147)  -- single idempotent INSERT, partner-scoped
@@ -18,6 +18,7 @@ See DESIGN.md for the workbook contract.  No database connection required.
 """
 import argparse
 import datetime as dt
+import os
 import pandas as pd
 
 CHUNK = 900
@@ -156,7 +157,7 @@ def key_predicate(col, cdef, s):
 def emit_op(op, meta, columns, stg, cnt, declare=True):
     """Returns SQL for one operation. declare=True emits staging DECLARE+populate;
     declare=False emits only the DML (re-using existing staging) -- for the
-    harness idempotency re-run."""
+    dev-test idempotency re-run."""
     cdef = coldef(columns)
     typ = op["OpType"]
 
@@ -441,7 +442,7 @@ def build_verify(meta, columns, operations):
 """
 
 
-def build_harness(meta, columns, operations):
+def build_dev_test(meta, columns, operations):
     partner = meta.get("PartnerScoped", "").upper() == "Y"
     _, decls = preamble(meta, columns, operations)
     body1, counters1, summary1 = ops_body(meta, columns, operations, suffix="", declare=True)
@@ -452,7 +453,7 @@ def build_harness(meta, columns, operations):
     guards = guard_block(meta, columns, operations, diag)
     idem = " AND ".join(f"{c}=0" for c in counters2)
     return f"""/* ============================================================
-   *** TEMPORARY -- QA ROLLBACK TEST -- DO NOT COMMIT ***
+   *** TEMPORARY -- QA DEV-TEST (TRANSACTION ROLLS BACK) -- DO NOT COMMIT ***
    US {meta['StoryId']} -- {meta['Feature']}
    Real deploy ops + real verification inside ONE transaction, then ROLLBACK.
    PASS 1 applies; PASS 2 re-runs the same ops (idempotency, expect all 0);
@@ -491,23 +492,48 @@ END CATCH;
 """
 
 
+def artifact_names(meta):
+    """Production-ready filenames derived from _Meta (release-aware).
+       deploy   : V<Release>.XXXX__DATA_<Table>_<Feature>_<StoryId>.sql   (Flyway; XXXX = seq, assigned at integration)
+       verify   : VERIFY_<Table>_<Feature>_<StoryId>.sql
+       dev-test : DEVTEST_<Table>_<StoryId>_DONOTCOMMIT.sql"""
+    tbl = meta["TargetTable"].split(".")[-1].strip("[]")
+    rel = meta.get("Release", "X.X")
+    feat, sid = meta["Feature"], meta["StoryId"]
+    return (f"V{rel}.XXXX__DATA_{tbl}_{feat}_{sid}.sql",
+            f"VERIFY_{tbl}_{feat}_{sid}.sql",
+            f"DEVTEST_{tbl}_{sid}_DONOTCOMMIT.sql")
+
+
 def main():
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(description="Generate deploy + verify + dev-test SQL from a standardized workbook.")
     ap.add_argument("--workbook", required=True)
-    ap.add_argument("--out", required=True, help="deploy script path")
-    ap.add_argument("--out-verify")
-    ap.add_argument("--out-test", help="QA rollback harness path")
+    ap.add_argument("--out-dir", help="write all three artifacts here using production-ready, release-aware names")
+    ap.add_argument("--out", help="explicit deploy path (overrides the derived name)")
+    ap.add_argument("--out-verify", help="explicit verify path")
+    ap.add_argument("--out-test", help="explicit dev-test (rollback) path")
     args = ap.parse_args()
+    if not (args.out_dir or args.out or args.out_verify or args.out_test):
+        ap.error("specify --out-dir (recommended) and/or explicit --out / --out-verify / --out-test")
+
     meta, columns, operations = load_all(args.workbook)
-    open(args.out, "w", encoding="utf-8").write(build_deploy(meta, columns, operations))
-    print(f"Deploy : {args.out}")
-    if args.out_verify:
-        open(args.out_verify, "w", encoding="utf-8").write(build_verify(meta, columns, operations))
-        print(f"Verify : {args.out_verify}")
-    if args.out_test:
-        open(args.out_test, "w", encoding="utf-8").write(build_harness(meta, columns, operations))
-        print(f"Harness: {args.out_test}")
-    print(f"  target={meta['TargetTable']}  ops={len(operations)}")
+    dname, vname, tname = artifact_names(meta)
+    if args.out_dir:
+        os.makedirs(args.out_dir, exist_ok=True)
+    out_deploy = args.out or (os.path.join(args.out_dir, dname) if args.out_dir else None)
+    out_verify = args.out_verify or (os.path.join(args.out_dir, vname) if args.out_dir else None)
+    out_test = args.out_test or (os.path.join(args.out_dir, tname) if args.out_dir else None)
+
+    if out_deploy:
+        open(out_deploy, "w", encoding="utf-8").write(build_deploy(meta, columns, operations))
+        print(f"Deploy   : {out_deploy}")
+    if out_verify:
+        open(out_verify, "w", encoding="utf-8").write(build_verify(meta, columns, operations))
+        print(f"Verify   : {out_verify}")
+    if out_test:
+        open(out_test, "w", encoding="utf-8").write(build_dev_test(meta, columns, operations))
+        print(f"Dev-test : {out_test}")
+    print(f"  target={meta['TargetTable']}  ops={len(operations)}  release={meta.get('Release','?')}")
 
 
 if __name__ == "__main__":

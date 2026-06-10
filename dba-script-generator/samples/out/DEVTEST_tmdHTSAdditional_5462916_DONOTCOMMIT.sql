@@ -1,5 +1,5 @@
 /* ============================================================
-   *** TEMPORARY -- QA ROLLBACK TEST -- DO NOT COMMIT ***
+   *** TEMPORARY -- QA DEV-TEST (TRANSACTION ROLLS BACK) -- DO NOT COMMIT ***
    US 5462916 -- 232_Metals_CSMS68855869
    Real deploy ops + real verification inside ONE transaction, then ROLLBACK.
    PASS 1 applies; PASS 2 re-runs the same ops (idempotency, expect all 0);

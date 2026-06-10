@@ -2,7 +2,7 @@
 
 **Status:** Proposal / for review
 **Author:** drafted with Claude (Opus 4.8), from analysis of US 5462916, US 5463147, and their merged PRs
-**Scope:** Automate the generation of idempotent DBA data-maintenance SQL (deploy + verification + QA rollback harness) for regulatory "insert/update/delete reference data" stories, from a single standardized Excel workbook.
+**Scope:** Automate the generation of idempotent DBA data-maintenance SQL (deploy + verification + QA rollback dev-test) for regulatory "insert/update/delete reference data" stories, from a single standardized Excel workbook.
 
 ---
 
@@ -17,7 +17,7 @@ This is slow, repetitive, and error-prone. Two real defects in this very work il
 - **AC-6 verification bug** — counting *all* rows in a heading instead of only the payload (false FAIL on any DB with pre-existing data).
 - **Defect 5463196** — the INSERT existence key omitted `StartEffDate`, so a new period record was skipped because an *expired* record matched the coarser key.
 
-**Goal:** one **config-driven generator** + one **standardized input workbook** that produces the deploy script, the verification script, and a transaction+rollback QA harness — covering both the simple (`tmgGlobalCodes`) and complex (`tmdHTSAdditional`) shapes, and turning the lessons above into built-in safeguards.
+**Goal:** one **config-driven generator** + one **standardized input workbook** that produces the deploy script, the verification script, and a transaction+rollback QA dev-test — covering both the simple (`tmgGlobalCodes`) and complex (`tmdHTSAdditional`) shapes, and turning the lessons above into built-in safeguards.
 
 ---
 
@@ -125,7 +125,7 @@ Backup name is derived from a fixed convention (§7): `[bck].[bck_<Table>_<Featu
 
 1. **Deploy script** — `V<release>.XXXX__DATA_<Table>_<Feature>_<StoryId>.sql`
 2. **Verification script** — `VERIFY_<Table>_<Feature>_<StoryId>.sql`
-3. **QA rollback harness** — `QA_ROLLBACK_TEST_<Table>_<StoryId>_DONOTCOMMIT.sql`
+3. **QA dev-test (rolls back)** — `DEVTEST_<Table>_<StoryId>_DONOTCOMMIT.sql`
 
 It is the architecture already built in `generate_sql.py`, generalized: two shared builders compose all three outputs, so a fix lives in one place.
 
@@ -137,7 +137,7 @@ load_workbook(xlsx) -> spec(meta, columns, operations) + per-op data tuples
         │
 deploy  = preamble + BEGIN TRAN + data_ops_sql(spec) + COMMIT + diagnostics + R8 restore block
 verify  = preamble + verification_sql(spec)
-harness = preamble + BEGIN TRAN + data_ops_sql(spec) [+ re-run for idempotency] + verification_sql(spec) + ROLLBACK
+dev-test = preamble + BEGIN TRAN + data_ops_sql(spec) [+ re-run for idempotency] + verification_sql(spec) + ROLLBACK
 ```
 
 ---
@@ -185,7 +185,7 @@ From `_Operations.VerifyGroupBy` + the action data, the engine emits:
 | Wrong existence key skipped a new period record (defect 5463196) | **Key-duplicate lint:** fail generation if the chosen `MatchKey` yields duplicate rows within the action tab (would have surfaced the missing `StartEffDate`). |
 | Verification counted pre-existing rows (AC-6) | Verification is **payload-scoped** by construction. |
 | `@BrokenCount` declared twice (parse error only SQL Server caught) | **Duplicate-DECLARE lint** + balanced-parens check on every generated script. |
-| Harness reimplemented logic → drift risk | **Single source of truth:** harness composes the *same* builders as deploy+verify. |
+| Dev-test reimplemented logic → drift risk | **Single source of truth:** dev-test composes the *same* builders as deploy+verify. |
 | AC prose sometimes conflicts with data | Engine emits the **corrected** scoped checks and **flags** the deviation, rather than matching prose blindly. |
 | Deploy must not silently change | Generator supports a **byte-diff check** against a prior committed script. |
 
@@ -224,7 +224,7 @@ If the engine reproduces two independently-authored, reviewed scripts (modulo co
 1. **Lock the contract** — finalize the `_Meta` / `_Columns` / `_Operations` schema (this doc) and the SQL skeleton (already battle-tested in `generate_sql.py`).
 2. **Build the engine** — generalize `generate_sql.py` into `gen_dba_script.py` (workbook → 3 outputs) with the value-source grammar and the per-op idempotency strategies.
 3. **Prove it** — regenerate both anchor deliverables; diff vs PRs #726/#727.
-4. **Harden** — add the lints (key-duplicate, duplicate-DECLARE, parens), the verification generator, and the QA harness composition.
+4. **Harden** — add the lints (key-duplicate, duplicate-DECLARE, parens), the verification generator, and the QA dev-test composition.
 5. **Document & template** — ship a blank standardized workbook + the two anchors as worked examples + a README and the conventions above.
 
 ---
@@ -233,6 +233,6 @@ If the engine reproduces two independently-authored, reviewed scripts (modulo co
 
 1. **Existence-key as a requirement field.** Should the work-item template explicitly require the match key per operation (incl. date columns)? Defect 5463196 shows leaving it implicit is dangerous.
 2. **Idempotency mechanism standard.** `MERGE` (tmgGlobalCodes) vs `INSERT…WHERE NOT EXISTS` (tmdHTSAdditional) are equivalent — standardize on one for all generated scripts? (Recommend `INSERT…WHERE NOT EXISTS` + guarded UPDATE/DELETE — simpler to read and review.)
-3. **Verification artifact.** tmgGlobalCodes shipped with no separate verify file; tmdHTSAdditional did. Standardize on always emitting the verify script + QA harness?
+3. **Verification artifact.** tmgGlobalCodes shipped with no separate verify file; tmdHTSAdditional did. Standardize on always emitting the verify script + QA dev-test?
 4. **Where the tool lives.** This repo (`tariffs_excel2sql_tools`) generalizing `main.py`/`tool.js`/`generate_sql.py`, or a home in the GTM SQL tooling?
 5. **AC prose vs. generated checks.** When literal AC wording conflicts with data reality, is it acceptable for the generator to emit the corrected check + a flagged note (current approach), or must AC wording be amended first?
