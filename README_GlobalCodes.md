@@ -9,7 +9,6 @@ Reads records directly from the Excel attachment on the ADO work item — no man
 
 | Tool | Target Table | Operations | Data Source |
 |------|-------------|------------|-------------|
-| `generate_sql.py` | `dbo.tmdHTSAdditional` | DELETE + UPDATE + INSERT | Excel spreadsheet (local file) |
 | `tmg_global_codes_gen.py` | `dbo.tmgGlobalCodes` | INSERT only (Business Rules v13 §6) | Excel attachment on ADO work item |
 
 ---
