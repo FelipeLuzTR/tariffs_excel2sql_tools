@@ -13,6 +13,36 @@ It turns the repetitive, error-prone hand-writing of `tmdHTSAdditional` /
 
 ---
 
+## TL;DR
+
+**The concept:** describe a regulatory data change **once** in a single Excel workbook — *which table, which columns, which operations* — and the tool writes the production SQL for you. No more hand-writing backup / insert / update / delete scripts (and no more bugs from getting the existence key or the verification wrong). One workbook → three SQL files:
+
+| File | What it is |
+|------|-----------|
+| `*.deploy.sql` | the real change — **idempotent**, backup-first, single transaction, safe to re-run |
+| `*.verify.sql` | read-only **acceptance checks** (payload-scoped) for post-deploy sign-off |
+| `*.harness.sql` | a **QA dry-run**: applies everything, verifies it, then `ROLLBACK`s — nothing is saved |
+
+**Use it in 3 steps:**
+
+```bash
+# 1. install
+pip install pandas openpyxl
+
+# 2. generate (point at your workbook — or a bundled sample)
+python gen_dba_script.py --workbook samples/STD_tmgGlobalCodes_5463147.xlsx \
+       --out x.deploy.sql --out-verify x.verify.sql --out-test x.harness.sql
+
+# 3. dry-run on QA, then deploy for real
+#    • run x.harness.sql on QA   → applies + verifies + ROLLS BACK; expect every roll-up column = PASS
+#    • run x.deploy.sql           → the actual deployment (idempotent, backup-first)
+#    • run x.verify.sql afterward → post-deploy sign-off
+```
+
+New to the workbook format? Open `samples/STD_tmgGlobalCodes_5463147.xlsx` (the simplest example) and read §4 below.
+
+---
+
 ## 1. Prerequisites
 
 ```bash
