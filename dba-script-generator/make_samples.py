@@ -58,6 +58,10 @@ def build_globalcodes():
         ("Insert", "ABIFTZ-HTS-STEEL-54DERIVATIVE", "9403200082"),
         ("Insert", "ABIFTZ-HTS-10PERCENT-DUTYCALC", "99038223"),
         ("Insert", "ABIFTZ-HTS-10PERCENT-DUTYCALC", "9903.82.23"),
+        # A reference row kept for context but NOT actioned. ActionFilter='Insert'
+        # (in _Operations) makes the engine skip it -- this is the only place the
+        # Action column does anything, and it demonstrates why it exists.
+        ("Already in prod", "ABIFTZ-HTS-STEEL-54PRIMARY", "72081000"),
     ]
     inserts = pd.DataFrame(rows, columns=["Action", "FieldName", "Code"]).astype(str)
     write_book(os.path.join(SAMPLES, "STD_tmgGlobalCodes_5463147.xlsx"),
@@ -83,7 +87,8 @@ def build_htsadditional(src):
                    "( (ISNULL(HTSNum,'') = '' AND ISNULL(CountryofOrigin,'') IN ('BY','CU','KP','RU')) "
                    "OR (ISNULL(HTSNum,'') <> '' AND ISNULL(CountryofOrigin,'') = '') )")
     operations = [
-        {"Order": 1, "ActionTab": "Deletes", "ActionFilter": "", "OpType": "DELETE",
+        # Pattern DELETE -- fully defined by FromPredicate; needs no data tab.
+        {"Order": 1, "ActionTab": "", "ActionFilter": "", "OpType": "DELETE",
          "MatchKey": "", "FromPredicate": delete_pred, "SetMap": "", "Idempotency": "PATTERN", "VerifyGroupBy": ""},
         {"Order": 2, "ActionTab": "Update_StartEffDate", "ActionFilter": "", "OpType": "UPDATE",
          "MatchKey": "HTSNum,Chapter99,TariffType",
@@ -93,12 +98,23 @@ def build_htsadditional(src):
          "MatchKey": "HTSNum,Chapter99,CountryofOrigin,TariffType",
          "FromPredicate": "t.EndEffDate = CAST(N'9999-12-31 23:59:59' AS DATETIME)",
          "SetMap": "EndEffDate <- CELL(New_EndEffDate)", "Idempotency": "GUARDED", "VerifyGroupBy": ""},
-        {"Order": 4, "ActionTab": "Inserts_tmdhtsadditional", "ActionFilter": "Insert", "OpType": "INSERT",
+        # Single-purpose tab -> no Action column / no ActionFilter needed.
+        {"Order": 4, "ActionTab": "Inserts_tmdhtsadditional", "ActionFilter": "", "OpType": "INSERT",
          "MatchKey": "HTSNum,Chapter99,TariffType,CountryofOrigin,StartEffDate", "FromPredicate": "",
          "SetMap": "", "Idempotency": "NOT_EXISTS", "VerifyGroupBy": "Chapter99"},
     ]
-    tabs = {t: pd.read_excel(src, sheet_name=t, dtype=object)
-            for t in ["Inserts_tmdhtsadditional", "Update_EndEffDate", "Update_StartEffDate", "Deletes"]}
+
+    def tab(sheet, keep):
+        """Read a source tab and keep ONLY the columns this op uses (drops Action/Notes/etc. fat)."""
+        df = pd.read_excel(src, sheet_name=sheet, dtype=object)
+        df.columns = [str(c).strip() for c in df.columns]
+        return df[keep]
+
+    tabs = {
+        "Inserts_tmdhtsadditional": tab("Inserts_tmdhtsadditional", [n for n, _ in coldefs]),
+        "Update_StartEffDate": tab("Update_StartEffDate", ["HTSNum", "Chapter99", "TariffType", "New_StartEffDate"]),
+        "Update_EndEffDate": tab("Update_EndEffDate", ["HTSNum", "Chapter99", "CountryofOrigin", "TariffType", "New_EndEffDate"]),
+    }
     write_book(os.path.join(SAMPLES, "STD_tmdHTSAdditional_5462916.xlsx"),
                meta, columns, operations, tabs)
 
@@ -114,19 +130,25 @@ def build_template():
         ["NeverDelete", "N"],
     ]
     columns = [
-        {"ColumnName": "<Col1>", "SqlType": "varchar(20)", "Source": "CELL", "NullNormalize": "Y if blanks allowed"},
-        {"ColumnName": "<Col2>", "SqlType": "datetime", "Source": "PARAM:EffectiveDate", "NullNormalize": ""},
-        {"ColumnName": "<Col3>", "SqlType": "char(1)", "Source": "CONST:Y", "NullNormalize": ""},
-        {"ColumnName": "<Col4>", "SqlType": "nvarchar(36)", "Source": "ECHO:<Col1>", "NullNormalize": ""},
+        # Source: CELL = from the data tab | PARAM:x = script param | CONST:v = literal | ECHO:Col = copy | NULL
+        {"ColumnName": "KeyCol", "SqlType": "varchar(20)", "Source": "CELL", "NullNormalize": "Y if blanks allowed"},
+        {"ColumnName": "DataCol", "SqlType": "nvarchar(36)", "Source": "CELL", "NullNormalize": ""},
+        {"ColumnName": "EffDate", "SqlType": "datetime", "Source": "PARAM:EffectiveDate", "NullNormalize": ""},
+        {"ColumnName": "Flag", "SqlType": "char(1)", "Source": "CONST:Y", "NullNormalize": ""},
+        {"ColumnName": "DecodeCol", "SqlType": "nvarchar(36)", "Source": "ECHO:DataCol", "NullNormalize": ""},
     ]
     operations = [{
-        "Order": 1, "ActionTab": "MyInserts", "ActionFilter": "Insert", "OpType": "INSERT (or UPDATE / DELETE)",
-        "MatchKey": "<comma,separated,key,columns>", "FromPredicate": "(UPDATE/DELETE only)",
+        "Order": 1, "ActionTab": "MyData", "ActionFilter": "", "OpType": "INSERT (or UPDATE / DELETE)",
+        "MatchKey": "KeyCol  (columns that uniquely identify a record)", "FromPredicate": "(UPDATE/DELETE only)",
         "SetMap": "(UPDATE only) Col <- CELL(New_Col)", "Idempotency": "NOT_EXISTS (or GUARDED / PATTERN)",
         "VerifyGroupBy": "(optional) column to group expected counts by",
     }]
-    action = pd.DataFrame([["Insert", "<value>", "<value>"]], columns=["Action", "<Col1>", "<Col2>"])
-    write_book(os.path.join(SAMPLES, "TEMPLATE.xlsx"), meta, columns, operations, {"MyInserts": action})
+    # The data tab holds ONE ROW PER RECORD with a column for each CELL field ONLY.
+    # PARAM/CONST/ECHO/NULL columns are supplied by the tool -- do NOT put them in the tab.
+    # (Add an optional 'Action' column + set ActionFilter only if the tab mixes
+    #  actionable rows with reference rows you want skipped.)
+    action = pd.DataFrame([["<key value>", "<data value>"]], columns=["KeyCol", "DataCol"])
+    write_book(os.path.join(SAMPLES, "TEMPLATE.xlsx"), meta, columns, operations, {"MyData": action})
 
 
 if __name__ == "__main__":

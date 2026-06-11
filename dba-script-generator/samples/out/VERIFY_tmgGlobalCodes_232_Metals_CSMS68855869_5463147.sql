@@ -8,13 +8,13 @@ DECLARE @PartnerID INT = (SELECT TOP 1 PartnerID FROM dbo.tmfDefaults WITH (NOLO
 
 /* ---- Backup exists (AC-1/AC-2) ---- */
 DECLARE @v_BackupRows INT = NULL;
-IF OBJECT_ID(N'[bck].[bck_tmgGlobalCodes_232_Metals_CSMS68855869_20260610_5463147]','U') IS NOT NULL
+IF OBJECT_ID(N'[bck].[bck_tmgGlobalCodes_232_Metals_CSMS68855869_5463147]','U') IS NOT NULL
 BEGIN
-    DECLARE @v_bsql nvarchar(max) = N'SELECT @c = COUNT(*) FROM [bck].[bck_tmgGlobalCodes_232_Metals_CSMS68855869_20260610_5463147] WITH (NOLOCK)';
+    DECLARE @v_bsql nvarchar(max) = N'SELECT @c = COUNT(*) FROM [bck].[bck_tmgGlobalCodes_232_Metals_CSMS68855869_5463147] WITH (NOLOCK)';
     EXEC sys.sp_executesql @v_bsql, N'@c INT OUTPUT', @c = @v_BackupRows OUTPUT;
 END
-SELECT [AC] = 'Backup', [BackupTable] = N'[bck].[bck_tmgGlobalCodes_232_Metals_CSMS68855869_20260610_5463147]',
-       [Exists] = CASE WHEN OBJECT_ID(N'[bck].[bck_tmgGlobalCodes_232_Metals_CSMS68855869_20260610_5463147]','U') IS NOT NULL THEN 1 ELSE 0 END, [RowCount] = @v_BackupRows;
+SELECT [AC] = 'Backup', [BackupTable] = N'[bck].[bck_tmgGlobalCodes_232_Metals_CSMS68855869_5463147]',
+       [Exists] = CASE WHEN OBJECT_ID(N'[bck].[bck_tmgGlobalCodes_232_Metals_CSMS68855869_5463147]','U') IS NOT NULL THEN 1 ELSE 0 END, [RowCount] = @v_BackupRows;
 
 /* ---- Op 1 INSERT: payload-scoped count per FieldName ---- */
 DECLARE @v_ins1 TABLE (
@@ -46,6 +46,6 @@ GROUP BY t.[FieldName], t.[Code] HAVING COUNT(*) > 1;
 
 /* ---- Sign-off roll-up (every column should read PASS) ---- */
 SELECT
-     [Backup exists] = CASE WHEN OBJECT_ID(N'[bck].[bck_tmgGlobalCodes_232_Metals_CSMS68855869_20260610_5463147]','U') IS NOT NULL THEN 'PASS' ELSE 'FAIL' END
+     [Backup exists] = CASE WHEN OBJECT_ID(N'[bck].[bck_tmgGlobalCodes_232_Metals_CSMS68855869_5463147]','U') IS NOT NULL THEN 'PASS' ELSE 'FAIL' END
     ,[Op1 per FieldName] = CASE WHEN NOT EXISTS (SELECT 1 FROM @v_exp1 e WHERE e.[expected] <> (SELECT COUNT(*) FROM dbo.tmgGlobalCodes t WITH (NOLOCK) WHERE EXISTS (SELECT 1 FROM @v_ins1 s WHERE t.[PartnerID] = @PartnerID AND t.[FieldName] = s.[FieldName] AND t.[Code] = s.[Code]) AND t.[FieldName] = e.[grp])) THEN 'PASS' ELSE 'FAIL' END
     ,[Op1 no-dup] = CASE WHEN NOT EXISTS (SELECT 1 FROM dbo.tmgGlobalCodes t WITH (NOLOCK) WHERE EXISTS (SELECT 1 FROM @v_ins1 s WHERE t.[PartnerID] = @PartnerID AND t.[FieldName] = s.[FieldName] AND t.[Code] = s.[Code]) GROUP BY t.[FieldName], t.[Code] HAVING COUNT(*)>1) THEN 'PASS' ELSE 'FAIL' END;

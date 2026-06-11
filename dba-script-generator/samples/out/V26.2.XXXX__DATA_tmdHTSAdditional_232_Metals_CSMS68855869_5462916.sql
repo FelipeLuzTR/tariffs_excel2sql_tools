@@ -16,28 +16,28 @@ DECLARE @Op4 INT = 0;
 IF OBJECT_ID('dbo.tmdHTSAdditional','U') IS NULL
 BEGIN
     SET @Msg = @Msg + @CRLF + ' - ERROR: dbo.tmdHTSAdditional does not exist' + CHAR(10) + '"';
-    SELECT DatabaseName=DB_NAME(), [DELETE_1]=@Op1, [UPDATE_2]=@Op2, [UPDATE_3]=@Op3, [INSERT_4]=@Op4, BackupTable=N'[bck].[bck_tmdHTSAdditional_232_Metals_CSMS68855869_20260610_5462916]', Msgs=@Msg;
+    SELECT DatabaseName=DB_NAME(), [DELETE_1]=@Op1, [UPDATE_2]=@Op2, [UPDATE_3]=@Op3, [INSERT_4]=@Op4, BackupTable=N'[bck].[bck_tmdHTSAdditional_232_Metals_CSMS68855869_5462916]', Msgs=@Msg;
     RETURN;
 END
 IF SCHEMA_ID('bck') IS NULL
 BEGIN
     SET @Msg = @Msg + @CRLF + ' - ERROR: backup schema does not exist' + CHAR(10) + '"';
-    SELECT DatabaseName=DB_NAME(), [DELETE_1]=@Op1, [UPDATE_2]=@Op2, [UPDATE_3]=@Op3, [INSERT_4]=@Op4, BackupTable=N'[bck].[bck_tmdHTSAdditional_232_Metals_CSMS68855869_20260610_5462916]', Msgs=@Msg;
+    SELECT DatabaseName=DB_NAME(), [DELETE_1]=@Op1, [UPDATE_2]=@Op2, [UPDATE_3]=@Op3, [INSERT_4]=@Op4, BackupTable=N'[bck].[bck_tmdHTSAdditional_232_Metals_CSMS68855869_5462916]', Msgs=@Msg;
     RETURN;
 END
 BEGIN TRY
     BEGIN TRANSACTION;
 
     /* ---- Backup (idempotent; never overwritten) ---- */
-    IF OBJECT_ID(N'[bck].[bck_tmdHTSAdditional_232_Metals_CSMS68855869_20260610_5462916]','U') IS NULL
+    IF OBJECT_ID(N'[bck].[bck_tmdHTSAdditional_232_Metals_CSMS68855869_5462916]','U') IS NULL
     BEGIN
-        DECLARE @BackupSQL nvarchar(max) = N'SELECT [HTSNum], [Chapter99], [CountryofOrigin], [StartEffDate], [EndEffDate], [TariffType], [TariffGroup], [RequiredStatusCode], [ValidationLevel], [ExportDate] INTO [bck].[bck_tmdHTSAdditional_232_Metals_CSMS68855869_20260610_5462916] FROM dbo.tmdHTSAdditional WITH (NOLOCK)';
+        DECLARE @BackupSQL nvarchar(max) = N'SELECT [HTSNum], [Chapter99], [CountryofOrigin], [StartEffDate], [EndEffDate], [TariffType], [TariffGroup], [RequiredStatusCode], [ValidationLevel], [ExportDate] INTO [bck].[bck_tmdHTSAdditional_232_Metals_CSMS68855869_5462916] FROM dbo.tmdHTSAdditional WITH (NOLOCK)';
         EXEC sys.sp_executesql @BackupSQL;
         SET @Msg = @Msg + @CRLF + ' - Backup created.';
     END
     ELSE SET @Msg = @Msg + @CRLF + ' - Backup already exists. Skipping.';
 
-    /* -- 1. DELETE Deletes -- */
+    /* -- 1. DELETE (pattern) -- */
     DELETE FROM dbo.tmdHTSAdditional
     WHERE Chapter99 = '99038212' AND TariffType = '232' AND ( (ISNULL(HTSNum,'') = '' AND ISNULL(CountryofOrigin,'') IN ('BY','CU','KP','RU')) OR (ISNULL(HTSNum,'') <> '' AND ISNULL(CountryofOrigin,'') = '') );
     SET @Op1 = @@ROWCOUNT;
@@ -2271,11 +2271,11 @@ BEGIN CATCH
 END CATCH;
 
 IF LEN(@Msg) > 1 SET @Msg = @Msg + CHAR(10) + '"';
-SELECT DatabaseName=DB_NAME(), [DELETE_1]=@Op1, [UPDATE_2]=@Op2, [UPDATE_3]=@Op3, [INSERT_4]=@Op4, BackupTable=N'[bck].[bck_tmdHTSAdditional_232_Metals_CSMS68855869_20260610_5462916]', Msgs=@Msg;
+SELECT DatabaseName=DB_NAME(), [DELETE_1]=@Op1, [UPDATE_2]=@Op2, [UPDATE_3]=@Op3, [INSERT_4]=@Op4, BackupTable=N'[bck].[bck_tmdHTSAdditional_232_Metals_CSMS68855869_5462916]', Msgs=@Msg;
 
 /* ============================================================
    QA-ONLY RESTORE (NEVER IN PRODUCTION):
    TRUNCATE TABLE dbo.tmdHTSAdditional;
-   INSERT INTO dbo.tmdHTSAdditional SELECT * FROM [bck].[bck_tmdHTSAdditional_232_Metals_CSMS68855869_20260610_5462916];
-   DROP TABLE [bck].[bck_tmdHTSAdditional_232_Metals_CSMS68855869_20260610_5462916];
+   INSERT INTO dbo.tmdHTSAdditional SELECT * FROM [bck].[bck_tmdHTSAdditional_232_Metals_CSMS68855869_5462916];
+   DROP TABLE [bck].[bck_tmdHTSAdditional_232_Metals_CSMS68855869_5462916];
 ============================================================ */

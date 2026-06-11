@@ -7,13 +7,13 @@ SET NOCOUNT ON;
 
 /* ---- Backup exists (AC-1/AC-2) ---- */
 DECLARE @v_BackupRows INT = NULL;
-IF OBJECT_ID(N'[bck].[bck_tmdHTSAdditional_232_Metals_CSMS68855869_20260610_5462916]','U') IS NOT NULL
+IF OBJECT_ID(N'[bck].[bck_tmdHTSAdditional_232_Metals_CSMS68855869_5462916]','U') IS NOT NULL
 BEGIN
-    DECLARE @v_bsql nvarchar(max) = N'SELECT @c = COUNT(*) FROM [bck].[bck_tmdHTSAdditional_232_Metals_CSMS68855869_20260610_5462916] WITH (NOLOCK)';
+    DECLARE @v_bsql nvarchar(max) = N'SELECT @c = COUNT(*) FROM [bck].[bck_tmdHTSAdditional_232_Metals_CSMS68855869_5462916] WITH (NOLOCK)';
     EXEC sys.sp_executesql @v_bsql, N'@c INT OUTPUT', @c = @v_BackupRows OUTPUT;
 END
-SELECT [AC] = 'Backup', [BackupTable] = N'[bck].[bck_tmdHTSAdditional_232_Metals_CSMS68855869_20260610_5462916]',
-       [Exists] = CASE WHEN OBJECT_ID(N'[bck].[bck_tmdHTSAdditional_232_Metals_CSMS68855869_20260610_5462916]','U') IS NOT NULL THEN 1 ELSE 0 END, [RowCount] = @v_BackupRows;
+SELECT [AC] = 'Backup', [BackupTable] = N'[bck].[bck_tmdHTSAdditional_232_Metals_CSMS68855869_5462916]',
+       [Exists] = CASE WHEN OBJECT_ID(N'[bck].[bck_tmdHTSAdditional_232_Metals_CSMS68855869_5462916]','U') IS NOT NULL THEN 1 ELSE 0 END, [RowCount] = @v_BackupRows;
 
 /* ---- Op 1 DELETE: no rows match the delete pattern remain (EXPECTED 0) ---- */
 SELECT [AC] = 'Op1 delete-remaining', [Remaining] = COUNT(*)
@@ -2240,7 +2240,7 @@ GROUP BY ISNULL(t.[HTSNum],''), t.[Chapter99], t.[TariffType], ISNULL(t.[Country
 
 /* ---- Sign-off roll-up (every column should read PASS) ---- */
 SELECT
-     [Backup exists] = CASE WHEN OBJECT_ID(N'[bck].[bck_tmdHTSAdditional_232_Metals_CSMS68855869_20260610_5462916]','U') IS NOT NULL THEN 'PASS' ELSE 'FAIL' END
+     [Backup exists] = CASE WHEN OBJECT_ID(N'[bck].[bck_tmdHTSAdditional_232_Metals_CSMS68855869_5462916]','U') IS NOT NULL THEN 'PASS' ELSE 'FAIL' END
     ,[Op1 deleted] = CASE WHEN NOT EXISTS (SELECT 1 FROM dbo.tmdHTSAdditional WITH (NOLOCK) WHERE Chapter99 = '99038212' AND TariffType = '232' AND ( (ISNULL(HTSNum,'') = '' AND ISNULL(CountryofOrigin,'') IN ('BY','CU','KP','RU')) OR (ISNULL(HTSNum,'') <> '' AND ISNULL(CountryofOrigin,'') = '') )) THEN 'PASS' ELSE 'FAIL' END
     ,[Op2 update] = CASE WHEN (SELECT COUNT(*) FROM dbo.tmdHTSAdditional t WITH (NOLOCK) JOIN @v_upd2 k ON ISNULL(t.[HTSNum],'') = ISNULL(k.[HTSNum],'') AND t.[Chapter99] = k.[Chapter99] AND t.[TariffType] = k.[TariffType] AND t.[StartEffDate] = k.[New_StartEffDate]) = (SELECT COUNT(*) FROM @v_upd2) THEN 'PASS' ELSE 'FAIL' END
     ,[Op3 update] = CASE WHEN (SELECT COUNT(*) FROM dbo.tmdHTSAdditional t WITH (NOLOCK) JOIN @v_upd3 k ON ISNULL(t.[HTSNum],'') = ISNULL(k.[HTSNum],'') AND t.[Chapter99] = k.[Chapter99] AND ISNULL(t.[CountryofOrigin],'') = ISNULL(k.[CountryofOrigin],'') AND t.[TariffType] = k.[TariffType] AND t.[EndEffDate] = k.[New_EndEffDate]) = (SELECT COUNT(*) FROM @v_upd3) THEN 'PASS' ELSE 'FAIL' END

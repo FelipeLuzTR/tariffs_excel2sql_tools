@@ -66,7 +66,7 @@ The workbook carries both the **data** and a machine-readable **spec** (so the e
 | `PartnerSource` | `SELECT TOP 1 PartnerID FROM dbo.tmfDefaults WITH (NOLOCK)` | — |
 | `NeverDelete` *(business rule guard)* | `Y` | `N` |
 
-Backup name is derived from a fixed convention (§7): `[bck].[bck_<Table>_<Feature>_<YYYYMMDD>_<StoryId>]`.
+Backup name is derived from a fixed convention (§7): `[bck].[bck_<Table>_<Feature>_<StoryId>]` (deterministic — no generation-date stamp, so the same workbook always yields byte-identical SQL).
 
 ### 4.2 `_Columns` (one row per target column)
 
@@ -99,7 +99,7 @@ Backup name is derived from a fixed convention (§7): `[bck].[bck_<Table>_<Featu
 | `VerifyGroupBy` | column(s) to group expected counts by for AC verification (e.g. `Chapter99`, `FieldName`) |
 
 ### 4.4 Action tabs & `Notes`
-- **Action tabs** hold the data, columns named to match the target (+ optional `Action` filter column, + `New_<Col>` columns for UPDATE "to" values). Multi-format rows (e.g. `99038223` and `9903.82.23`) are simply **two data rows** — no engine logic.
+- **Action tabs** hold the data: **one row per record, one column per `CELL` field only** (`PARAM`/`CONST`/`ECHO`/`NULL` columns are supplied by the engine — not in the tab; extra columns are ignored). UPDATE tabs add the `New_<Col>` "to" value. Multi-format rows (e.g. `99038223` and `9903.82.23`) are simply **two data rows** — no engine logic. The `Action` column is **optional** and read **only** when `ActionFilter` is set (to skip non-actionable rows like `Already in prod`); the engine **warns** if an `Action` column is present but unused, so it can't quietly mislead. A pattern `DELETE` reads no tab (`ActionTab` blank).
 - **`Notes`** (and any `notes_*` sheet) is free text, ignored by the engine.
 
 ### 4.5 Worked `_Operations` for the two stories
@@ -214,7 +214,7 @@ If the engine reproduces two independently-authored, reviewed scripts (modulo co
 ## 11. File & PR conventions (carried from the merged PRs)
 
 - **Path:** `Database/Application/<release>/Hotfix/V<release>.<seq>__DATA_<Table>_<Feature>_<CSMS>_<StoryId>.sql` (the `<seq>` is assigned at integration — PR #726's `0712` was renumbered to `0714`; the generator emits an `XXXX` placeholder).
-- **Backup name:** `[bck].[bck_<Table>_<Feature>_<YYYYMMDD>_<StoryId>]`.
+- **Backup name:** `[bck].[bck_<Table>_<Feature>_<StoryId>]` (deterministic; `StoryId` makes it unique without a date stamp).
 - **PR flow:** feature branch → `develop`, then a cherry-pick PR into `release/<n>` (`AB#<StoryId>` in title). Repo default branch is **`develop`**, not `master`.
 
 ---

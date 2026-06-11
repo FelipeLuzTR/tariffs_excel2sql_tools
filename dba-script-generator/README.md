@@ -120,8 +120,8 @@ Control sheets (prefixed `_`) carry the spec; the rest are data.
 | Field | Meaning |
 |---|---|
 | `Order` | execution order (backup is always first) |
-| `ActionTab` | data sheet for this op |
-| `ActionFilter` | value in the tab's `Action` column selecting rows (e.g. `Insert`) |
+| `ActionTab` | data sheet for this op (leave blank for a pattern `DELETE` — it needs no data) |
+| `ActionFilter` | *(optional)* value in an `Action` column to select rows (e.g. `Insert`) — see "Data tabs" below |
 | `OpType` | `INSERT` / `UPDATE` / `DELETE` |
 | `MatchKey` | comma-separated columns = existence / join key |
 | `FromPredicate` | which existing rows to act on (UPDATE/DELETE) |
@@ -134,6 +134,20 @@ Control sheets (prefixed `_`) carry the spec; the rest are data.
 > Getting it wrong is how a real defect (US 5463196) slipped a missing insert
 > past review. The engine lints for duplicate keys within the data, but the
 > *choice* is human judgment.
+
+### Data tabs — keep them lean
+
+A data tab holds **one row per record, with a column for each `CELL` field only**.
+Everything else is supplied by the tool, so **don't put it in the tab**:
+
+- `PARAM` / `CONST` / `ECHO` / `NULL` columns are generated — omit them from the data.
+- Extra columns the operation doesn't use (notes, etc.) are **ignored**.
+- A **pattern `DELETE`** is fully defined by its `FromPredicate` — it reads **no** data tab (leave `ActionTab` blank).
+- The **`Action` column is optional** and is read **only** when the op sets `ActionFilter` — use it solely to keep non-actionable rows (e.g. `Already in prod`) in the same sheet and have them skipped. On a single-purpose tab, omit it. *(The engine prints a `WARNING` if it finds an `Action` column with no `ActionFilter` — meaning it's being ignored — so the workbook can't quietly mislead.)*
+
+The two samples show both conventions: `tmgGlobalCodes` keeps an `Action` column **and** a reference row to demonstrate the filter; `tmdHTSAdditional` is lean — no `Action` column, and the `DELETE` has no tab.
+
+The generated SQL is **deterministic** — same workbook in, byte-identical SQL out (the backup table name is keyed on Feature + StoryId, not a generation date).
 
 ---
 

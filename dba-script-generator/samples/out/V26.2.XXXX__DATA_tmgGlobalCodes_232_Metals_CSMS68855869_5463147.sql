@@ -12,26 +12,26 @@ DECLARE @Op1 INT = 0;
 IF OBJECT_ID('dbo.tmgGlobalCodes','U') IS NULL
 BEGIN
     SET @Msg = @Msg + @CRLF + ' - ERROR: dbo.tmgGlobalCodes does not exist' + CHAR(10) + '"';
-    SELECT DatabaseName=DB_NAME(), [INSERT_1]=@Op1, BackupTable=N'[bck].[bck_tmgGlobalCodes_232_Metals_CSMS68855869_20260610_5463147]', Msgs=@Msg;
+    SELECT DatabaseName=DB_NAME(), [INSERT_1]=@Op1, BackupTable=N'[bck].[bck_tmgGlobalCodes_232_Metals_CSMS68855869_5463147]', Msgs=@Msg;
     RETURN;
 END
 IF OBJECT_ID('dbo.tmfDefaults','U') IS NULL
 BEGIN
     SET @Msg = @Msg + @CRLF + ' - ERROR: dbo.tmfDefaults does not exist' + CHAR(10) + '"';
-    SELECT DatabaseName=DB_NAME(), [INSERT_1]=@Op1, BackupTable=N'[bck].[bck_tmgGlobalCodes_232_Metals_CSMS68855869_20260610_5463147]', Msgs=@Msg;
+    SELECT DatabaseName=DB_NAME(), [INSERT_1]=@Op1, BackupTable=N'[bck].[bck_tmgGlobalCodes_232_Metals_CSMS68855869_5463147]', Msgs=@Msg;
     RETURN;
 END
 IF SCHEMA_ID('bck') IS NULL
 BEGIN
     SET @Msg = @Msg + @CRLF + ' - ERROR: backup schema does not exist' + CHAR(10) + '"';
-    SELECT DatabaseName=DB_NAME(), [INSERT_1]=@Op1, BackupTable=N'[bck].[bck_tmgGlobalCodes_232_Metals_CSMS68855869_20260610_5463147]', Msgs=@Msg;
+    SELECT DatabaseName=DB_NAME(), [INSERT_1]=@Op1, BackupTable=N'[bck].[bck_tmgGlobalCodes_232_Metals_CSMS68855869_5463147]', Msgs=@Msg;
     RETURN;
 END
 DECLARE @PartnerID INT = (SELECT TOP 1 PartnerID FROM dbo.tmfDefaults WITH (NOLOCK));
 IF @PartnerID IS NULL
 BEGIN
     SET @Msg = @Msg + @CRLF + ' - ERROR: PartnerID not found in tmfDefaults' + CHAR(10) + '"';
-    SELECT DatabaseName=DB_NAME(), [INSERT_1]=@Op1, BackupTable=N'[bck].[bck_tmgGlobalCodes_232_Metals_CSMS68855869_20260610_5463147]', Msgs=@Msg;
+    SELECT DatabaseName=DB_NAME(), [INSERT_1]=@Op1, BackupTable=N'[bck].[bck_tmgGlobalCodes_232_Metals_CSMS68855869_5463147]', Msgs=@Msg;
     RETURN;
 END
 
@@ -39,9 +39,9 @@ BEGIN TRY
     BEGIN TRANSACTION;
 
     /* ---- Backup (idempotent; never overwritten) ---- */
-    IF OBJECT_ID(N'[bck].[bck_tmgGlobalCodes_232_Metals_CSMS68855869_20260610_5463147]','U') IS NULL
+    IF OBJECT_ID(N'[bck].[bck_tmgGlobalCodes_232_Metals_CSMS68855869_5463147]','U') IS NULL
     BEGIN
-        DECLARE @BackupSQL nvarchar(max) = N'SELECT [PartnerID], [EffDate], [FieldName], [Code], [Decode], [StaticFlag], [DeletedFlag], [KeepDuringRollback] INTO [bck].[bck_tmgGlobalCodes_232_Metals_CSMS68855869_20260610_5463147] FROM dbo.tmgGlobalCodes WITH (NOLOCK)';
+        DECLARE @BackupSQL nvarchar(max) = N'SELECT [PartnerID], [EffDate], [FieldName], [Code], [Decode], [StaticFlag], [DeletedFlag], [KeepDuringRollback] INTO [bck].[bck_tmgGlobalCodes_232_Metals_CSMS68855869_5463147] FROM dbo.tmgGlobalCodes WITH (NOLOCK)';
         EXEC sys.sp_executesql @BackupSQL;
         SET @Msg = @Msg + @CRLF + ' - Backup created.';
     END
@@ -79,11 +79,11 @@ BEGIN CATCH
 END CATCH;
 
 IF LEN(@Msg) > 1 SET @Msg = @Msg + CHAR(10) + '"';
-SELECT DatabaseName=DB_NAME(), [INSERT_1]=@Op1, BackupTable=N'[bck].[bck_tmgGlobalCodes_232_Metals_CSMS68855869_20260610_5463147]', Msgs=@Msg;
+SELECT DatabaseName=DB_NAME(), [INSERT_1]=@Op1, BackupTable=N'[bck].[bck_tmgGlobalCodes_232_Metals_CSMS68855869_5463147]', Msgs=@Msg;
 
 /* ============================================================
    QA-ONLY RESTORE (NEVER IN PRODUCTION):
    TRUNCATE TABLE dbo.tmgGlobalCodes;
-   INSERT INTO dbo.tmgGlobalCodes SELECT * FROM [bck].[bck_tmgGlobalCodes_232_Metals_CSMS68855869_20260610_5463147];
-   DROP TABLE [bck].[bck_tmgGlobalCodes_232_Metals_CSMS68855869_20260610_5463147];
+   INSERT INTO dbo.tmgGlobalCodes SELECT * FROM [bck].[bck_tmgGlobalCodes_232_Metals_CSMS68855869_5463147];
+   DROP TABLE [bck].[bck_tmgGlobalCodes_232_Metals_CSMS68855869_5463147];
 ============================================================ */

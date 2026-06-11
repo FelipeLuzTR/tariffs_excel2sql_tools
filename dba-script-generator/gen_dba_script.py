@@ -107,9 +107,11 @@ def coldef(columns):
 
 
 def backup_name(meta):
+    # Deterministic: keyed on Feature + StoryId (unique per story). No date stamp, so the
+    # generator is reproducible -- regenerating yields byte-identical SQL. (StoryId already
+    # makes the name unique; a generation-date stamp only broke repeatability.)
     tbl = meta["TargetTable"].split(".")[-1].strip("[]")
-    today = dt.date.today().strftime("%Y%m%d")
-    return f"[{meta.get('BackupSchema','bck')}].[bck_{tbl}_{meta['Feature']}_{today}_{meta['StoryId']}]"
+    return f"[{meta.get('BackupSchema','bck')}].[bck_{tbl}_{meta['Feature']}_{meta['StoryId']}]"
 
 
 def cell_columns(columns):
@@ -492,6 +494,26 @@ END CATCH;
 """
 
 
+def validate(operations):
+    """Catch the ambiguous / misleading workbook shapes before generating.
+       - ActionFilter set but the tab has no 'Action' column  -> error (can't filter).
+       - 'Action' column present but no ActionFilter           -> warn (it is IGNORED; documentation only).
+       - DELETE op carrying an action tab                      -> warn (pattern DELETEs read FromPredicate, not the tab)."""
+    for op in operations:
+        df = op.get("_df")
+        has_action = df is not None and "Action" in [str(c).strip() for c in df.columns]
+        tab = op.get("ActionTab") or "(none)"
+        if op.get("ActionFilter") and not has_action:
+            raise SystemExit(f"ERROR: op on tab '{tab}' sets ActionFilter='{op['ActionFilter']}' "
+                             f"but that tab has no 'Action' column.")
+        if has_action and not op.get("ActionFilter"):
+            print(f"WARNING: tab '{tab}' has an 'Action' column but the operation sets no ActionFilter -- "
+                  f"the engine IGNORES it (documentation only). Drop the column or set ActionFilter.")
+        if op["OpType"] == "DELETE" and op.get("ActionTab"):
+            print(f"WARNING: DELETE op references tab '{tab}', but pattern DELETEs are driven by FromPredicate -- "
+                  f"the tab data is not read. Leave ActionTab blank for pattern deletes.")
+
+
 def artifact_names(meta):
     """Production-ready filenames derived from _Meta (release-aware).
        deploy   : V<Release>.XXXX__DATA_<Table>_<Feature>_<StoryId>.sql   (Flyway; XXXX = seq, assigned at integration)
@@ -517,6 +539,7 @@ def main():
         ap.error("specify --out-dir (recommended) and/or explicit --out / --out-verify / --out-test")
 
     meta, columns, operations = load_all(args.workbook)
+    validate(operations)
     dname, vname, tname = artifact_names(meta)
     if args.out_dir:
         os.makedirs(args.out_dir, exist_ok=True)
