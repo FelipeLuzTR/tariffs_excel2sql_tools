@@ -164,8 +164,27 @@ def emit_op(op, meta, columns, stg, cnt, declare=True):
     typ = op["OpType"]
 
     if typ == "DELETE":
-        return (f"    DELETE FROM {meta['TargetTable']}\n    WHERE {op['FromPredicate']};\n"
-                f"    SET {cnt} = @@ROWCOUNT;")
+        # Pattern delete: fully defined by FromPredicate, no data tab.
+        if not op.get("ActionTab"):
+            return (f"    DELETE FROM {meta['TargetTable']}\n    WHERE {op['FromPredicate']};\n"
+                    f"    SET {cnt} = @@ROWCOUNT;")
+        # Keyed delete: stage the keys, delete target rows that match (+ optional FromPredicate guard).
+        key = [k.strip() for k in op["MatchKey"].split(",")]
+        rows = op_rows(op, columns)
+        setup = ""
+        if declare:
+            decls = [f"        [{c}] {cdef[c]['SqlType'] if c in cdef else 'varchar(50)'}" for c in key]
+            tuples = ["(" + ", ".join(lit(r[c], cdef[c]["SqlType"]) if c in cdef else q(r[c]) for c in key) + ")"
+                      for _, r in rows.iterrows()]
+            decl = "    DECLARE " + stg + " TABLE (\n" + ",\n".join(decls) + "\n    );"
+            setup = decl + "\n" + chunked_insert(stg, ", ".join(f"[{c}]" for c in key), tuples) + "\n\n"
+        joinpred = "\n      AND ".join(
+            (f"ISNULL(t.[{k}],'') = ISNULL(k.[{k}],'')" if cdef[k].get("NullNormalize", "").upper() == "Y"
+             else f"t.[{k}] = k.[{k}]") for k in key)
+        where = f"\n    WHERE {op['FromPredicate']}" if op.get("FromPredicate") else ""
+        dml = (f"    DELETE t\n    FROM {meta['TargetTable']} t\n    JOIN {stg} k\n      ON  {joinpred}{where};\n"
+               f"    SET {cnt} = @@ROWCOUNT;")
+        return setup + dml
 
     if typ == "INSERT":
         cells = cell_columns(columns)
@@ -265,11 +284,32 @@ SELECT [AC] = 'Backup', [BackupTable] = N'{bkp}',
     for i, op in enumerate(operations, 1):
         typ = op["OpType"]
         if typ == "DELETE":
-            blocks.append(f"""/* ---- Op {i} DELETE: no rows match the delete pattern remain (EXPECTED 0) ---- */
+            if not op.get("ActionTab"):
+                # Pattern delete: no rows matching the predicate should remain.
+                blocks.append(f"""/* ---- Op {i} DELETE (pattern): no rows match the delete predicate (EXPECTED 0) ---- */
 SELECT [AC] = 'Op{i} delete-remaining', [Remaining] = COUNT(*)
 FROM {meta['TargetTable']} WITH (NOLOCK) WHERE {op['FromPredicate']};""")
-            rollup.append(f"[Op{i} deleted] = CASE WHEN NOT EXISTS (SELECT 1 FROM {meta['TargetTable']} WITH (NOLOCK) "
-                          f"WHERE {op['FromPredicate']}) THEN 'PASS' ELSE 'FAIL' END")
+                rollup.append(f"[Op{i} deleted] = CASE WHEN NOT EXISTS (SELECT 1 FROM {meta['TargetTable']} WITH (NOLOCK) "
+                              f"WHERE {op['FromPredicate']}) THEN 'PASS' ELSE 'FAIL' END")
+            else:
+                # Keyed delete: none of the staged target keys should remain (payload-scoped).
+                key = [k.strip() for k in op["MatchKey"].split(",")]
+                rows = op_rows(op, columns)
+                ktuples = sorted({"(" + ", ".join(lit(r[c], cdef[c]["SqlType"]) if c in cdef else q(r[c]) for c in key) + ")"
+                                  for _, r in rows.iterrows()})
+                vk = f"@v_del{i}"
+                decl = "DECLARE " + vk + " TABLE (\n" + ",\n".join(
+                    f"    [{c}] {cdef[c]['SqlType'] if c in cdef else 'varchar(50)'}" for c in key) + "\n);"
+                pop = chunked_insert(vk, ", ".join(f"[{c}]" for c in key), ktuples)
+                keypred = " AND ".join(key_predicate(k, cdef, "s") for k in key)
+                blocks.append(f"""/* ---- Op {i} DELETE (keyed): none of the {len(ktuples)} target keys remain (EXPECTED 0) ---- */
+{decl}
+{pop}
+SELECT [AC]='Op{i} delete-remaining', [expected]=0,
+       [remaining]=(SELECT COUNT(*) FROM {meta['TargetTable']} t WITH (NOLOCK)
+                    WHERE EXISTS (SELECT 1 FROM {vk} s WHERE {keypred}));""")
+                rollup.append(f"[Op{i} deleted] = CASE WHEN NOT EXISTS (SELECT 1 FROM {meta['TargetTable']} t WITH (NOLOCK) "
+                              f"WHERE EXISTS (SELECT 1 FROM {vk} s WHERE {keypred})) THEN 'PASS' ELSE 'FAIL' END")
 
         elif typ == "INSERT":
             cells = cell_columns(columns)
@@ -498,7 +538,7 @@ def validate(operations):
     """Catch the ambiguous / misleading workbook shapes before generating.
        - ActionFilter set but the tab has no 'Action' column  -> error (can't filter).
        - 'Action' column present but no ActionFilter           -> warn (it is IGNORED; documentation only).
-       - DELETE op carrying an action tab                      -> warn (pattern DELETEs read FromPredicate, not the tab)."""
+       - DELETE: keyed (ActionTab + MatchKey) or pattern (FromPredicate); neither -> error."""
     for op in operations:
         df = op.get("_df")
         has_action = df is not None and "Action" in [str(c).strip() for c in df.columns]
@@ -509,9 +549,13 @@ def validate(operations):
         if has_action and not op.get("ActionFilter"):
             print(f"WARNING: tab '{tab}' has an 'Action' column but the operation sets no ActionFilter -- "
                   f"the engine IGNORES it (documentation only). Drop the column or set ActionFilter.")
-        if op["OpType"] == "DELETE" and op.get("ActionTab"):
-            print(f"WARNING: DELETE op references tab '{tab}', but pattern DELETEs are driven by FromPredicate -- "
-                  f"the tab data is not read. Leave ActionTab blank for pattern deletes.")
+        if op["OpType"] == "DELETE":
+            if op.get("ActionTab") and not op.get("MatchKey"):
+                raise SystemExit(f"ERROR: keyed DELETE on tab '{tab}' needs a MatchKey "
+                                 f"(the columns that identify which rows to delete).")
+            if not op.get("ActionTab") and not op.get("FromPredicate"):
+                raise SystemExit("ERROR: DELETE op has neither an ActionTab (keyed delete) "
+                                 "nor a FromPredicate (pattern delete) -- nothing to delete.")
 
 
 def artifact_names(meta):
@@ -527,6 +571,44 @@ def artifact_names(meta):
             f"DEVTEST_{tbl}_{sid}_DONOTCOMMIT.sql")
 
 
+def operations_review(meta, columns, operations):
+    """Plain-language summary of the engineering-judgment layer (_Meta + _Operations).
+    Shown before any SQL is written so a human approves the INTERPRETATION -- the match
+    keys, guards, and idempotency strategy -- which is often AI-authored and is NOT what
+    the dev-test validates (the dev-test checks counts/idempotency for the GIVEN keys, not
+    whether the keys themselves are correct)."""
+    L = ["=" * 74,
+         "OPERATIONS REVIEW REQUIRED  --  approve before generating SQL",
+         "=" * 74,
+         "Two trust tiers in this workbook:",
+         "  * action-tab DATA      -> BA/SME-sourced (the rows).",
+         "  * _Meta/_Columns/_Operations -> ENGINEERING layer. When AI-authored it must",
+         "    be HUMAN-REVIEWED. Match keys + guards are the highest-risk decisions and",
+         "    are NOT caught by the dev-test.",
+         "-" * 74,
+         f"Target : {meta['TargetTable']}    Story {meta.get('StoryId','?')}    Release {meta.get('Release','?')}",
+         f"Feature: {meta.get('Feature','?')}",
+         f"Flags  : PartnerScoped={meta.get('PartnerScoped','N')}  NeverDelete={meta.get('NeverDelete','N')}  "
+         f"BackupSchema={meta.get('BackupSchema','bck')}"
+         + (f"  EffectiveDate={meta['EffectiveDate']}" if meta.get("EffectiveDate") else "")
+         + (f"  RetireDate={meta['RetireDate']}" if meta.get("RetireDate") else ""),
+         "-" * 74]
+    for i, op in enumerate(operations, 1):
+        df = op.get("_df")
+        n = "" if df is None else f"  ({len(op_rows(op, columns))} rows)"
+        L.append(f"{i}. {op['OpType']:6}  tab={op.get('ActionTab') or '(pattern)'}{n}")
+        if op.get("MatchKey"):
+            L.append(f"     MatchKey    : {op['MatchKey']}")
+        if op.get("FromPredicate"):
+            L.append(f"     Guard       : {op['FromPredicate']}")
+        if op.get("SetMap"):
+            L.append(f"     Set         : {op['SetMap']}")
+        L.append(f"     Idempotency : {op.get('Idempotency','?')}"
+                 + (f"    VerifyBy: {op['VerifyGroupBy']}" if op.get("VerifyGroupBy") else ""))
+    L.append("=" * 74)
+    return "\n".join(L)
+
+
 def main():
     ap = argparse.ArgumentParser(description="Generate deploy + verify + dev-test SQL from a standardized workbook.")
     ap.add_argument("--workbook", required=True)
@@ -534,12 +616,24 @@ def main():
     ap.add_argument("--out", help="explicit deploy path (overrides the derived name)")
     ap.add_argument("--out-verify", help="explicit verify path")
     ap.add_argument("--out-test", help="explicit dev-test (rollback) path")
+    ap.add_argument("--confirm-operations", action="store_true",
+                    help="REQUIRED to write SQL: confirms a human has reviewed and approved the "
+                         "_Operations interpretation (match keys, guards, idempotency). Without it, "
+                         "the tool prints the operations for review and writes nothing.")
     args = ap.parse_args()
     if not (args.out_dir or args.out or args.out_verify or args.out_test):
         ap.error("specify --out-dir (recommended) and/or explicit --out / --out-verify / --out-test")
 
     meta, columns, operations = load_all(args.workbook)
     validate(operations)
+
+    # Structural approval gate: never write SQL from an unreviewed operations interpretation.
+    print(operations_review(meta, columns, operations))
+    if not args.confirm_operations:
+        print("\nNO FILES WRITTEN. A human must review/approve the operation interpretation above\n"
+              "(match keys, guards, idempotency). Re-run with --confirm-operations once approved.")
+        return
+
     dname, vname, tname = artifact_names(meta)
     if args.out_dir:
         os.makedirs(args.out_dir, exist_ok=True)

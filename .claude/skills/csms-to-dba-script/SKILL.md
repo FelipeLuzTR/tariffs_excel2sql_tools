@@ -47,7 +47,7 @@ human-reviewed proposal is the control point; the QA dev-test is the row-level b
 
    Then gate with AskUserQuestion (Approve / Edit / Cancel). Apply any requested edits — by changing the **workbook spec**, never the SQL — and re-present. Re-check counts and the duplicate-key rule on each iteration.
 
-5. **On final approval**, materialize the standardized `.xlsx` workbook (so there is an auditable record of exactly what was approved), then invoke the **`gen-dba-script`** skill on it to emit the deploy / verify / dev-test SQL.
+5. **On final approval**, materialize the standardized `.xlsx` workbook (an auditable record of exactly what was approved), then invoke the **`gen-dba-script`** skill on it. That generator **gates on an operations review** (it writes nothing without `--confirm-operations`). The `_Operations` you build here — match keys, guards, idempotency — is the **AI-judgment tier**; the Step-4 approval *is* the human sign-off on it, so pass `--confirm-operations`. **Never** pass that flag for an interpretation the user has not explicitly approved.
 
 6. **Hand off**: tell the user to run the dev-test on QA first (expect all `PASS`), then deploy, then verify.
 

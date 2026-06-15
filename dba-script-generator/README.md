@@ -33,8 +33,9 @@ see §2.)
 # 1. install
 pip install pandas openpyxl
 
-# 2. generate all three artifacts (production-ready, release-aware names) into a folder
-python gen_dba_script.py --workbook samples/STD_tmgGlobalCodes_5463147.xlsx --out-dir out/
+# 2. review the operations (no files written), then generate after a human approves
+python gen_dba_script.py --workbook samples/STD_tmgGlobalCodes_5463147.xlsx --out-dir out/                       # review only
+python gen_dba_script.py --workbook samples/STD_tmgGlobalCodes_5463147.xlsx --out-dir out/ --confirm-operations  # writes
 
 # 3. dry-run on QA, then deploy for real
 #    • run the DEVTEST_*.sql on QA   → applies + verifies + ROLLS BACK; expect every roll-up column = PASS
@@ -78,14 +79,23 @@ There is no fully-automatic step here: the workbook captures human decisions (wh
 which match key, which operations). The tool removes the *SQL-writing* drudgery, not the
 domain judgment.
 
-## 3. Run it
+## 3. Run it — review, THEN confirm
+
+The generator **writes nothing without `--confirm-operations`** (an approval gate). Run it twice:
 
 ```bash
+# 1. Review: prints the _Operations interpretation (match keys, guards, idempotency). No files.
 python gen_dba_script.py --workbook <your-workbook.xlsx> --out-dir out/
+
+# 2. Generate: only after a human has approved that interpretation.
+python gen_dba_script.py --workbook <your-workbook.xlsx> --out-dir out/ --confirm-operations
 ```
 
-`--out-dir` writes all three artifacts with the production-ready names above.
-For one-off control you can instead pass explicit paths: `--out`, `--out-verify`, `--out-test`.
+Why the gate: the action-tab **data** is BA/SME-sourced, but `_Meta`/`_Columns`/`_Operations`
+(the **match keys and guards**) are the engineering-judgment layer. When those were AI-authored,
+they must be human-reviewed first — the dev-test validates the *data*, not whether the *key* is
+right in principle. `--out-dir` writes all three artifacts with the production-ready names above;
+for one-off control pass explicit `--out`, `--out-verify`, `--out-test`.
 
 ## 4. Use the outputs
 
@@ -163,8 +173,8 @@ Pre-generated outputs are in [`samples/out/`](samples/out/). Regenerate them wit
 
 ```bash
 python make_samples.py                                   # rebuilds TEMPLATE + the tmgGlobalCodes sample
-python gen_dba_script.py --workbook samples/STD_tmgGlobalCodes_5463147.xlsx --out-dir samples/out
-python gen_dba_script.py --workbook samples/STD_tmdHTSAdditional_5462916.xlsx --out-dir samples/out
+python gen_dba_script.py --workbook samples/STD_tmgGlobalCodes_5463147.xlsx --out-dir samples/out --confirm-operations
+python gen_dba_script.py --workbook samples/STD_tmdHTSAdditional_5462916.xlsx --out-dir samples/out --confirm-operations
 ```
 
 ---
