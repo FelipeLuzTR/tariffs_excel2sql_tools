@@ -63,21 +63,29 @@ pip install pandas openpyxl       # Python 3.9+
 
 ## 2. Getting a workbook
 
-You produce the standardized workbook one of two ways:
+You produce the standardized workbook one of three ways:
 
-1. **From a starter (recommended).** Copy `samples/TEMPLATE.xlsx` (blank) or a sample
-   (`samples/STD_*.xlsx`), then fill in the three control sheets + your data tabs per §5.
-2. **Wrap the work-item spreadsheet.** If the analyst already provided the rows in their own
-   Excel, keep those as the data tabs and add the `_Meta` / `_Columns` / `_Operations` control
-   sheets that describe them. `make_samples.py` shows exactly this — it builds the
-   `tmdHTSAdditional` sample by wrapping the work-item spreadsheet:
+1. **From a starter.** Copy `samples/TEMPLATE.xlsx` (blank) or a sample (`samples/STD_*.xlsx`),
+   then fill in the three control sheets + your data tabs per §5.
+2. **From a BA attachment, via the adapter (recommended — repeatable + reviewable).** If the
+   analyst/BA attached a raw delta spreadsheet, don't hand-write a one-off build script — use
+   the committed, config-driven adapter `build_workbook.py`. It pairs a per-table **profile**
+   (`profiles/<table>.json` — the `_Columns`, column aliases, and default match keys) with a
+   small per-story **spec** (`.json` — the operations: which source tab → which op, match key,
+   guard, set):
    ```bash
-   python make_samples.py --hts-source <CSMS..._FINAL.xlsx>
+   python build_workbook.py --attachment <BA_delta.xlsx> --spec <story.json> --out <workbook.xlsx>
    ```
+   The spec is the engineering interpretation in diffable, reviewable form. Worked example:
+   `specs/EXAMPLE_5475122_tmdHTSAdditional.json` — a 4-op remediation (keyed DELETE + two
+   guarded UPDATEs + INSERT). Same attachment + spec → same workbook, every time.
+3. **Wrap it by hand.** Keep the analyst's rows as data tabs and add the control sheets
+   yourself; `make_samples.py --hts-source <FINAL.xlsx>` shows this pattern.
 
-There is no fully-automatic step here: the workbook captures human decisions (which rows,
-which match key, which operations). The tool removes the *SQL-writing* drudgery, not the
-domain judgment.
+There is no fully-automatic step here: the **spec** (or the control sheets) captures human
+decisions — which rows, which match key, which operations. The tools remove the *SQL-writing*
+and *assembly* drudgery, not the domain judgment. The match keys + guards in the spec are the
+engineering layer, and `gen_dba_script.py` gates on them (§3) before any SQL is written.
 
 ## 3. Run it — review, THEN confirm
 

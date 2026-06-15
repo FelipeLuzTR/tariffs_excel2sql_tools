@@ -13,9 +13,11 @@ output is consistent, idempotent, and matches the validated patterns.
 ## When to use
 
 Use when a workbook already exists in the standardized format — control sheets
-`_Meta`, `_Columns`, `_Operations` plus action data tabs. (To produce a workbook from
-a regulatory bulletin first, use the `csms-to-dba-script` skill.) The full workbook
-contract is in `dba-script-generator/README.md` (§5) and `dba-script-generator/DESIGN.md`.
+`_Meta`, `_Columns`, `_Operations` plus action data tabs. To *produce* a workbook first:
+from a regulatory bulletin, use the `csms-to-dba-script` skill; from a BA's raw delta
+attachment, use the committed adapter `dba-script-generator/build_workbook.py` with a
+per-table profile + a per-story spec (README §2). The full workbook contract is in
+`dba-script-generator/README.md` (§5) and `dba-script-generator/DESIGN.md`.
 
 ## Two trust tiers (read this first)
 

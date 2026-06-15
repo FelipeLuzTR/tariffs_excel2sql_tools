@@ -1,0 +1,31 @@
+{
+  "target_table": "dbo.tmdHTSAdditional",
+  "meta_defaults": {
+    "BackupSchema": "bck",
+    "PartnerScoped": "N",
+    "NeverDelete": "N"
+  },
+  "columns": [
+    {"ColumnName": "HTSNum",             "SqlType": "varchar(20)", "Source": "CELL", "NullNormalize": "Y"},
+    {"ColumnName": "Chapter99",          "SqlType": "varchar(20)", "Source": "CELL", "NullNormalize": ""},
+    {"ColumnName": "CountryofOrigin",    "SqlType": "varchar(10)", "Source": "CELL", "NullNormalize": "Y"},
+    {"ColumnName": "StartEffDate",       "SqlType": "datetime",    "Source": "CELL", "NullNormalize": ""},
+    {"ColumnName": "EndEffDate",         "SqlType": "datetime",    "Source": "CELL", "NullNormalize": ""},
+    {"ColumnName": "TariffType",         "SqlType": "varchar(20)", "Source": "CELL", "NullNormalize": ""},
+    {"ColumnName": "TariffGroup",        "SqlType": "varchar(20)", "Source": "CELL", "NullNormalize": ""},
+    {"ColumnName": "RequiredStatusCode", "SqlType": "varchar(1)",  "Source": "CELL", "NullNormalize": ""},
+    {"ColumnName": "ValidationLevel",    "SqlType": "varchar(1)",  "Source": "CELL", "NullNormalize": ""},
+    {"ColumnName": "ExportDate",         "SqlType": "datetime",    "Source": "CELL", "NullNormalize": ""}
+  ],
+  "aliases": {
+    "HTSNum": ["hts"],
+    "CountryofOrigin": ["coo", "country"],
+    "ExportDate": ["export date"]
+  },
+  "default_keys": {
+    "INSERT": "HTSNum,Chapter99,TariffType,CountryofOrigin,StartEffDate",
+    "UPDATE": "HTSNum,Chapter99,CountryofOrigin,TariffType",
+    "DELETE": "HTSNum,Chapter99,TariffType,CountryofOrigin"
+  },
+  "_notes": "Default INSERT key includes StartEffDate (period-safe per defect 5463196). Override match_key per story if the AC mandates a different key (e.g. the literal 4-col R3 key). Column-name aliasing already handles case + spaces; only add non-obvious spellings here."
+}

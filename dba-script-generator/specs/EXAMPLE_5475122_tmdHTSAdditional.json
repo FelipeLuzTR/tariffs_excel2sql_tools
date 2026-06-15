@@ -1,0 +1,39 @@
+{
+  "_comment": "Worked example of a build_workbook.py spec: a 4-operation tmdHTSAdditional remediation (ADO story 5475122). Pairs with profiles/tmdHTSAdditional.json. Run: python build_workbook.py --attachment <BA_delta.xlsx> --spec specs/EXAMPLE_5475122_tmdHTSAdditional.json --out out/5475122.xlsx . Match keys default from the profile unless overridden; 'where' splits one source tab into multiple ops; 'guard' is the idempotency predicate.",
+  "profile": "tmdHTSAdditional",
+  "meta": {
+    "StoryId": "5475122",
+    "Feature": "232_Metals_Remediation",
+    "Release": "26.3",
+    "EffectiveDate": "2026-06-08 00:00:00"
+  },
+  "operations": [
+    {
+      "optype": "DELETE",
+      "tab": "DELETE",
+      "out_tab": "DELETE_99038201"
+    },
+    {
+      "optype": "UPDATE",
+      "tab": "UPDATE_EndEffDate",
+      "out_tab": "UPDATE_99038212_end",
+      "where": {"column": "Chapter99", "in": ["99038212"]},
+      "set": "EndEffDate<-CELL(New_EndEffDate)",
+      "guard": "t.EndEffDate > CAST(N'2026-06-07 23:59:59' AS DATETIME)"
+    },
+    {
+      "optype": "INSERT",
+      "tab": "INSERT",
+      "out_tab": "INSERT_99038212",
+      "verify_group": "Chapter99"
+    },
+    {
+      "optype": "UPDATE",
+      "tab": "UPDATE_EndEffDate",
+      "out_tab": "UPDATE_sunset",
+      "where": {"column": "Chapter99", "in": ["99038220", "99038221", "99038222"]},
+      "set": "EndEffDate<-CELL(New_EndEffDate)",
+      "guard": "t.EndEffDate = CAST(N'9999-12-31 23:59:59' AS DATETIME)"
+    }
+  ]
+}
