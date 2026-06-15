@@ -16,16 +16,15 @@ It turns the repetitive, error-prone hand-writing of `tmdHTSAdditional` /
 for you. No more hand-writing backup / insert / update / delete scripts (and no more bugs
 from getting the existence key or the verification wrong).
 
-**Where the workbook comes from — you author it.** A regulatory story arrives with the
-analyst's spreadsheet of the rows to change; you express it in this tool's standard format.
-The fastest way: **copy a starting point** and fill it in —
-- `samples/TEMPLATE.xlsx` — a blank, structured starter, **or**
-- `samples/STD_tmgGlobalCodes_5463147.xlsx` — the simplest worked example to clone.
+**Where the workbook comes from.** The BA/SME provides the regulatory **story + a data
+spreadsheet** (the rows, counts, effective dates) — that is their job, and it's complete as-is.
+An **AI skill drafts the standardized workbook** from it (`csms-to-dba-script` from a CBP
+bulletin, or `build_workbook.py` from the BA's attachment — §2), and the **developer reviews**
+the result at the approval gate (§3) before any SQL is written. You can also author/clone a
+workbook by hand (`samples/TEMPLATE.xlsx`).
 
-A workbook has three control sheets (`_Meta`, `_Columns`, `_Operations`) that describe the
-change, plus your data tabs. **The workbook *is* the requirements, in machine-readable form.**
-(Full contract in §5; if you already have the analyst's work-item spreadsheet, you wrap it —
-see §2.)
+Either way, a workbook is three control sheets (`_Meta`, `_Columns`, `_Operations`) + data
+tabs — **the requirements in machine-readable form** (full contract in §5).
 
 **Then generate + run, in 3 steps:**
 
@@ -52,6 +51,26 @@ Step 2 writes, into `out/`:
 | `DEVTEST_<Table>_<StoryId>_DONOTCOMMIT.sql` | a **QA dry-run**: applies everything, verifies it, then `ROLLBACK`s — nothing is saved |
 
 Every generated SELECT uses `WITH (NOLOCK)`; counts are **payload-scoped** so pre-existing rows never inflate them.
+
+---
+
+## Who does what (and where the AI skills fit)
+
+This replaces "the Dev hand-writes the SQL." The Dev now **reviews** the AI's translation instead of authoring it — nobody hand-writes the script, and nobody rubber-stamps it either.
+
+| Role | Owns | Does |
+|---|---|---|
+| **BA / SME** | regulatory **intent + data** | writes the story (operations, R-requirements, effective dates) and attaches the data spreadsheet. Does **not** write SQL or pick match keys — that's technical, and they shouldn't be asked to. |
+| **AI skills** | the **translation** | draft the standardized workbook and generate the SQL — the drudgery the Dev used to do by hand. Never deploy; always stop at the gate. |
+| **Developer** | the **engineering review** | reviews the AI's operation interpretation (match keys + guards) at the approval gate, ratifies the judgment calls, approves. Owns the dev-test + deploy. |
+
+The pieces:
+
+- **`csms-to-dba-script`** (skill) — interprets a CBP bulletin → proposes a workbook (bulletin-driven changes).
+- **`build_workbook.py`** + a per-table profile + a per-story spec — turns a BA's raw delta attachment → a workbook (§2).
+- **`gen-dba-script`** (skill / `gen_dba_script.py`) — turns a workbook → deploy/verify/dev-test SQL, **behind the operations-approval gate** (§3).
+
+**End-to-end:** SME story + data → AI drafts workbook → AI generates SQL *(gate stops it)* → **Dev reviews + approves** → dev-test on QA → deploy → verify.
 
 ---
 
@@ -104,6 +123,19 @@ Why the gate: the action-tab **data** is BA/SME-sourced, but `_Meta`/`_Columns`/
 they must be human-reviewed first — the dev-test validates the *data*, not whether the *key* is
 right in principle. `--out-dir` writes all three artifacts with the production-ready names above;
 for one-off control pass explicit `--out`, `--out-verify`, `--out-test`.
+
+### What the developer checks at the gate
+
+The gate prints each operation (match key, guard, idempotency). You confirm it against the
+**story — which is your answer key** — *not* by trusting the AI's "looks faithful" summary:
+
+1. **Each op's match key + guard matches the story's Script Requirements** (R3 existence keys, R8 scope/order, R9 delete guard). A mechanical cross-check, op by op.
+2. **The counts match** the spreadsheet / Summary tab.
+3. **Ratify the judgment calls** — the few places the AI went *beyond* the literal spec and you must actively decide:
+   - a **period-safe match key** (e.g. adding `StartEffDate` per defect 5463196 even when the AC text lists fewer columns);
+   - translating prose like *"rows currently open"* into a concrete **guard predicate** (e.g. `EndEffDate > '<date>'`).
+
+The **SME is not asked to confirm this** — they already provided the story + data; the SQL mechanics are the Dev's call. And the dev-test that follows validates counts + idempotency on real data but **not** whether a key is right *in principle*, so it does **not** replace this review.
 
 ## 4. Use the outputs
 
@@ -198,8 +230,14 @@ python gen_dba_script.py --workbook samples/STD_tmdHTSAdditional_5462916.xlsx --
 
 ## 8. Provenance
 
-Validated against two already-shipped, human-reviewed deliverables
-(`V26.2.0713` / `V26.2.0714` in `gtm-legacy_gtm-sql`): the generated
-`tmdHTSAdditional` deploy is **data-identical** to the QA-validated script, and
-the `tmgGlobalCodes` deploy is **semantically equivalent** to the merged PR. See
-[DESIGN.md](DESIGN.md) for the full background, the unifying model, and limits.
+Validated against already-shipped, human-reviewed deliverables in `gtm-legacy_gtm-sql`:
+
+- **Generator** — the `tmdHTSAdditional` deploy is **data-identical** to the QA-validated
+  `V26.2.0713`, and the `tmgGlobalCodes` deploy is **semantically equivalent** to the merged
+  `V26.2.0714`.
+- **Adapter** (`build_workbook.py`) — rebuilding the `5441030` and `5346291` workbooks from
+  specs yields deploy + verify SQL **byte-identical** to separately-validated output; the
+  multi-op `5475122` remediation reproduces the correct 279/16/16/1092 operations with the
+  keyed DELETE and both idempotency guards.
+
+See [DESIGN.md](DESIGN.md) for the full background, the unifying model, and limits.
