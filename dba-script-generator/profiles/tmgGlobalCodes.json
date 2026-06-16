@@ -1,0 +1,24 @@
+{
+  "target_table": "dbo.tmgGlobalCodes",
+  "meta_defaults": {
+    "BackupSchema": "bck",
+    "PartnerScoped": "Y",
+    "PartnerSource": "SELECT TOP 1 PartnerID FROM dbo.tmfDefaults WITH (NOLOCK)",
+    "NeverDelete": "Y"
+  },
+  "columns": [
+    {"ColumnName": "PartnerID",          "SqlType": "int",         "Source": "PARAM:PartnerID",     "NullNormalize": ""},
+    {"ColumnName": "EffDate",            "SqlType": "datetime",    "Source": "PARAM:EffectiveDate", "NullNormalize": ""},
+    {"ColumnName": "FieldName",          "SqlType": "varchar(30)", "Source": "CELL",                "NullNormalize": ""},
+    {"ColumnName": "Code",               "SqlType": "nvarchar(36)","Source": "CELL",                "NullNormalize": ""},
+    {"ColumnName": "Decode",             "SqlType": "nvarchar(36)","Source": "ECHO:Code",           "NullNormalize": ""},
+    {"ColumnName": "StaticFlag",         "SqlType": "char(1)",     "Source": "CONST:Y",             "NullNormalize": ""},
+    {"ColumnName": "DeletedFlag",        "SqlType": "char(1)",     "Source": "CONST:N",             "NullNormalize": ""},
+    {"ColumnName": "KeepDuringRollback", "SqlType": "char(1)",     "Source": "CONST:N",             "NullNormalize": ""}
+  ],
+  "aliases": {},
+  "default_keys": {
+    "INSERT": "PartnerID,FieldName,Code"
+  },
+  "_notes": "tmgGlobalCodes is insert-only (NeverDelete=Y). Only FieldName + Code come from the data tab; PartnerID/EffDate are PARAMs, Decode ECHOes Code, the flags are CONSTs -- the engine fills those, so the BA's data tab need only carry FieldName + Code."
+}

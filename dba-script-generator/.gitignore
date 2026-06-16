@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+
+# Scratch: generated SQL, downloaded work-item attachments, ad-hoc build scripts
+out/

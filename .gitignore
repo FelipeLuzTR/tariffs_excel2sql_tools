@@ -1,0 +1,10 @@
+# IDE / editor
+.vs/
+.vscode/
+
+# Python
+__pycache__/
+*.pyc
+
+# Excel lock files
+~$*.xlsx
