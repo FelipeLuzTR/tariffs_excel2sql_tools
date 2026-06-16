@@ -1,12 +1,12 @@
-# Process Map — CBP/Regulatory trade changes → GTM updates (and where AI fits)
+# Process Map — Regulatory trade changes → GTM updates (and where AI fits)
 
-> **Purpose.** This document maps how external trade-data changes (CBP CSMS bulletins,
-> Federal Register proclamations, routine HTS files, PGA notices) flow into ONESOURCE
-> Global Trade, the **distinct pipelines** that handle them, and **how AI skills/automation
-> can cover each one honestly** — with explicit human gates and a hard rule against
-> fabricating data that isn't grounded in an authoritative source.
+> **Purpose.** This document maps how regulatory tariff changes (delivered to us as
+> **ADO user stories with Excel data attachments** prepared by a BA/analyst) and routine
+> HTS content files flow into ONESOURCE Global Trade, the **distinct pipelines** that handle
+> them, and **how AI skills/automation can cover each one honestly** — with explicit human
+> gates and a hard rule against fabricating data that isn't grounded in an authoritative source.
 >
-> **Status:** Draft for alignment · **Last updated:** 2026-06-11
+> **Status:** Draft for alignment · **Last updated:** 2026-06-16
 >
 > This is a *strategy/architecture* doc, not an implementation spec. It exists to agree on
 > scope and sequencing before anything else is built.
@@ -15,9 +15,9 @@
 
 ## TL;DR
 
-- "React to a CBP change" is **not one process** — it's **three different pipelines**, and only one of them produces SQL.
-- We have working AI skills for the **interpretation → SQL-generation** half of the regulatory-DBA pipeline (`csms-to-dba-script` → `gen-dba-script`). The **simple** table (`tmgGlobalCodes`) is reproducible end-to-end today.
-- The **complex** table (`tmdHTSAdditional`) **cannot be authored from documents alone.** It needs **live database state** (to compute row diffs) plus an analyst's **reconciliation** of bulletin + attachment + DB. That grounding is the actual work — and the skill correctly **refuses to fake it**.
+- "React to a regulatory trade change" is **not one process** — it's **three different pipelines**, and only one of them produces SQL.
+- The regulatory-DBA pipeline starts from an **ADO user story + its Excel data attachment** (the rows a BA/analyst has prepared) and runs them through `build_workbook.py` → a standardized workbook → `gen-dba-script`. The **simple** table (`tmgGlobalCodes`) is reproducible end-to-end today.
+- The **complex** table (`tmdHTSAdditional`) **cannot be authored from the attachment alone.** It needs **live database state** (`gtm-sql`, to compute row diffs) combined with the attachment's prepared rows. That grounding is the actual work — and the tooling correctly **refuses to fake it**.
 - The **routine HTS-file** pipeline (the `.ABI` upload SOP) is a separate **operational** automation — no SQL at all — that reaches **production**, so it needs a hard human gate.
 - The path forward is a **small suite of skills/automations with clean handoffs and human gates**, never a single mega-skill, and never an ungrounded guess presented as fact.
 
@@ -25,19 +25,16 @@
 
 ## 1. Trigger & source landscape
 
-Different changes announce themselves through different channels, with different latency and different completeness. This is the single most important thing to get right, because **the trigger determines timeliness and the source determines whether the data is even actionable.**
+Different changes announce themselves through different channels, with different latency and different completeness. This matters because **the trigger determines timeliness and the source determines whether the data is even actionable.**
 
 | Channel | Covers | Timely? | Carries actionable records? |
 |---|---|---|---|
-| **CBP CSMS bulletin** (public page / GovDelivery) | All CSMS | ✅ for regulatory CSMS · ❌ **days late for HTS updates (HSU)** | Regulatory CSMS: usually yes (with its attachment). HSU: **no** — only a count + a pointer |
-| **CBP CSMS subscription email** (GovDelivery) | All CSMS | Same latency as the bulletin | Same as the bulletin |
+| **ADO user story + Excel data attachment** | Regulatory overlay changes (Section 232/301/etc.) | On story creation | Yes — the BA/analyst has prepared the row-level data in the attachment |
 | **Internal HTS-update monitor email** (`gtm_noreply@thomsonreuters.com`, subj `HTS UPDATE`, body `new hts update found: <N>`) | HTS file updates | ✅ **early — the real trigger for HSU** | **No** — just the update number `N` (e.g. 2612, 2613) |
 | **ABI file-received alert** (`EZFTZSupport@ipnotifications.com`) | HTS files staged for retrieval | On file arrival | Points to a file to retrieve (the `.ABI`/`HTS_` content) |
-| **Federal Register proclamation** (e.g. Proclamation 11032) | Regulatory tariff actions | On publication | The legal annex (HTS lists) behind a regulatory CSMS |
 
 **Notes / facts established this session:**
-- The public CBP CSMS page **403s automated fetches**, and the CSMS archive app may refuse connections — so the bulletin must be reached via its GovDelivery link (two URL shapes: `…/accounts/USDHSCBP/bulletins/<id>` and `…/bulletins/gd/USDHSCBP-<id>?wgt_ref=…`; `<id>` is opaque, **not** the CSMS number).
-- For HSU, the public bulletin is a **lagging** indicator. The early signal exists **only** as the internal monitor email. So polling the public source can never beat email for HSU — **email is the correct trigger** there.
+- Pipeline 2's trigger is the **internal HTS-update monitor email** (`gtm_noreply`), which carries the update number `N` early. The actual file is then retrieved from the ABI Gateway.
 - **Open question:** the relationship between the `gtm_noreply` monitor ping and the `EZFTZSupport` file-received alert (do both fire? which drives the file retrieval and the reply?). See §8.
 
 ---
@@ -46,29 +43,41 @@ Different changes announce themselves through different channels, with different
 
 ### Pipeline 1 — Regulatory DBA data scripts  *(SQL; our current tooling)*
 
-**What:** A specific regulatory CSMS (e.g. **68855869**, Section 232 metals, Proclamation 11032) requires data changes to **`tmdHTSAdditional`** (period-based additional-duty records) and **`tmgGlobalCodes`** (ABI/FTZ duty-calculation codes). Delivered as **idempotent SQL scripts** PR'd into `tr/gtm-legacy_gtm-sql`.
+**What:** A regulatory change (e.g. the **Section 232 metals change**, Proclamation 11032) requires data changes to **`tmdHTSAdditional`** (period-based additional-duty records) and **`tmgGlobalCodes`** (ABI/FTZ duty-calculation codes). Delivered as **idempotent SQL scripts** PR'd into `tr/gtm-legacy_gtm-sql`.
 
-**Tracked in ADO as a Feature with one story per table** — e.g. Feature **5462818** → story **5462916** (`tmdHTSAdditional`) + story **5463147** (`tmgGlobalCodes`).
+**Tracked in ADO as a Feature with one story per table** — e.g. Feature **5462818** → story **5462916** (`tmdHTSAdditional`) + story **5463147** (`tmgGlobalCodes`). (A related metals story: **5475122**.)
 
-**Inputs:** the CSMS bulletin + its **attachment** (the HTS list, e.g. `Metals HTS LIST 6426FINAL.docx`) + the Federal Register annex + **the current DB state** + GTM reference conventions.
+**Inputs:** an **ADO user story** + its **Excel data attachment** (the BA/analyst's prepared rows) + **the current DB state** (for the complex side) + GTM reference conventions.
+
+**Flow:**
+
+```
+ADO story + Excel attachment (prepared rows)
+   └─ build_workbook.py   (committed adapter: a per-table profile in profiles/ + a per-story spec)
+        → standardized workbook (_Meta / _Columns / _Operations)
+   └─ gen-dba-script      (writes nothing without --confirm-operations;
+                            a DEVELOPER reviews the match keys / guards first)
+        → deploy.sql / verify.sql / dev-test.sql
+   └─ QA dev-test → deploy → verify → PR to gtm-legacy_gtm-sql
+```
 
 **Status by table:**
 
-| Table | Reproducible from docs by the skill? | Why |
+| Table | Reproducible from the attachment by the tool? | Why |
 |---|---|---|
 | `tmgGlobalCodes` (simple) | ✅ **Yes, end-to-end** | A handful of rows; FieldName/format conventions are stable; SQL generated byte-identical to shipped `V26.2.0714` |
 | `tmdHTSAdditional` (complex) | ❌ **No — needs DB grounding** | See §3 |
 
-**Current AI coverage:** `csms-to-dba-script` (interpret bulletin → propose workbook → human approve) → `gen-dba-script` (deterministic deploy/verify/dev-test SQL). **The generation half is solid.** The **grounding** half (Pipeline 1's complex side) is the gap.
+**Current AI coverage:** `build_workbook.py` (turn the story's attachment into a standardized workbook) → `gen-dba-script` (deterministic deploy/verify/dev-test SQL). **The generation half is solid.** The **grounding** half (Pipeline 1's complex side) is the gap.
 
 ### Pipeline 2 — Routine ABI content file  *(operational; NO SQL)*
 
-**What:** CBP/the data vendor pushes routine **HTS content files** (the standard tariff schedule updates, ~weekly, sequential numbers like 2612 → 2613). These are loaded into `US_ABI_Content` by **retrieving a file and re-uploading it through legacy GTM web pages** — there is no SQL and no DBA script.
+**What:** CBP/the data vendor pushes routine **HTS content files** (the standard tariff schedule updates, ~weekly, sequential numbers like 2612 → 2613). These are loaded into `US_ABI_Content` by **retrieving a file and re-uploading it through legacy GTM web pages** — there is no SQL and no DBA script. This pipeline's trigger is the internal HTS-update monitor email.
 
 **The manual SOP (from `How To Update US_ABI_Content when new file arrives_Kraken_V2.docx`):**
 
 ```
-trigger email (N, e.g. 2501/2613)
+internal monitor email (N, e.g. 2501/2613)
    └─ retrieve from US ABI Gateway (fmgUSABIGateway.aspx)
         partner 3002 · "Other Partner Incoming" · Other Partner 875 · From-date = email date
         find HTS_* file whose F110 number (chars 5–8) == N and has a real record range
@@ -83,24 +92,24 @@ trigger email (N, e.g. 2501/2613)
 
 ### Pipeline 3 — PGA validation updates  *(parked)*
 
-**What:** PGA/admissibility message-set and document-code changes — e.g. CSMS **68878482** (FDA PG13 LPCO issuer geographic qualifier code). These touch a **different validation/message-set surface**, not the Section 232 duty tables. Out of scope for Pipelines 1 & 2.
+**What:** PGA/admissibility message-set and document-code changes (e.g. an FDA PG13 LPCO issuer geographic qualifier code). These touch a **different validation/message-set surface**, not the Section 232 duty tables. Out of scope for Pipelines 1 & 2.
 
-**Current AI coverage:** the `csms-to-dba-script` scope gate **correctly declines** these (they are not `tmdHTSAdditional`/`tmgGlobalCodes` changes). Building real coverage is a future decision.
+**Current AI coverage:** none. Pipeline 1's tooling is scoped to `tmdHTSAdditional`/`tmgGlobalCodes` changes only, so PGA changes fall outside it. Building real coverage is a future decision.
 
 ---
 
 ## 3. The grounding problem (the crux)
 
-The 68855869 run was the clearest lesson of the whole effort. The **simple** side generated correctly; the **complex** side could not be authored honestly from the bulletin + attachment, for two reasons:
+The Section 232 metals run was the clearest lesson of the whole effort. The **simple** side generated correctly; the **complex** side could not be authored honestly from the attachment alone, for two reasons:
 
-1. **Diff operations need live DB state.** On `tmdHTSAdditional`, the cleanup `DELETE`, the StartEffDate shifts, and the EndEffDate retirements are **diffs against the rows that currently exist** (which rows presently carry a given StartEffDate / open-ended EndEffDate). That information lives **only in the database** — not in any regulatory document.
-2. **The INSERT set is a cross-product that needs reference data + rules.** The new rows are roughly *(HTS-per-heading from the attachment) × (per-heading country lists from the bulletin) × (GTM period/format conventions)*. Producing the exact row set requires applying country-scoping rules per heading **and** DB-confirmed reference data.
+1. **Diff operations need live DB state.** On `tmdHTSAdditional`, the cleanup `DELETE`, the StartEffDate shifts, and the EndEffDate retirements are **diffs against the rows that currently exist** (which rows presently carry a given StartEffDate / open-ended EndEffDate). That information lives **only in the database** — not in any attachment.
+2. **The INSERT set is a cross-product that needs reference data + rules.** The new rows are roughly *(HTS-per-heading) × (per-heading country lists) × (GTM period/format conventions)*. Producing the exact row set requires applying country-scoping rules per heading **and** DB-confirmed reference data.
 
-This is why the real delivery's `make_samples.py` accepts `--hts-source <analyst spreadsheet>`: **an analyst had already reconciled bulletin + attachment + DB into row-level data. That reconciliation is the actual work, and it is not reproducible from the PDF/DOCX alone.**
+This is why the work depends on **the attachment's prepared data + live DB state (`gtm-sql`)** to compute the diff operations: **a BA/analyst has already reconciled the regulatory change into row-level data in the attachment. That reconciliation is the actual work, and the complex-side diffs still have to be computed against the live DB.** The simple `tmgGlobalCodes` side, by contrast, works from the attachment alone.
 
-**Rule that falls out of this:** *Never fabricate ungrounded data.* If a value isn't in the source documents or confirmable against the DB, the skill must surface it for human input — not invent it. (This is exactly the behavior the skill already demonstrated when it refused to fake the complex side.)
+**Rule that falls out of this:** *Never fabricate ungrounded data.* If a value isn't in the attachment or confirmable against the DB, the tool must surface it for human input — not invent it.
 
-**A second, separate integrity issue:** the 68855869 run was **contaminated** — the agent had already seen the committed samples, so it "knew" GTM internals (FieldName strings, dual-format convention) that aren't in the bulletin. A trustworthy validation must run on a **CSMS whose fixtures the agent has never seen.**
+**A second, separate integrity issue:** any validation run must avoid contamination — if the agent has already seen the committed samples, it "knows" GTM internals (FieldName strings, dual-format convention) that aren't in the input data. A trustworthy validation must run on a **story whose fixtures the agent has never seen.**
 
 ---
 
@@ -109,22 +118,22 @@ This is why the real delivery's `make_samples.py` accepts `--hts-source <analyst
 A **suite** with clean handoffs and human gates — not one monolith.
 
 ```
-                         ┌─────────────────────────────────────────────┐
-   CSMS bulletin /  ───► │  csms-to-dba-script  (Pipeline 1)            │
-   proclamation /        │   • scope gate (decline PGA/admissibility)   │
-   attachment            │   • obtain bulletin (CBP/GovDelivery)        │
-                         │   • already-deployed? (ADO tree + repo +     │
-                         │       commit-date) ─ never local samples     │
-                         │   • GROUND complex side via gtm-sql  ◄── NEW │
-                         │       (DB diffs + reconciliation rules)      │
-                         │   • PROPOSE workbook ─► HUMAN APPROVES        │
-                         └───────────────┬─────────────────────────────┘
-                                         ▼
-                         ┌─────────────────────────────────────────────┐
-                         │  gen-dba-script  (deterministic)             │
-                         │   deploy.sql / verify.sql / dev-test.sql     │
-                         └───────────────┬─────────────────────────────┘
-                                         ▼  QA dev-test → deploy → verify → PR to gtm-legacy_gtm-sql
+   ADO user story    ───► ┌─────────────────────────────────────────────┐
+   + Excel data            │  build_workbook.py  (Pipeline 1)            │
+   attachment              │   • per-table profile (profiles/)           │
+                           │   • per-story spec                          │
+                           │   • GROUND complex side via gtm-sql  ◄── NEW │
+                           │       (DB diffs + reconciliation rules)      │
+                           │   • emit standardized workbook               │
+                           └───────────────┬─────────────────────────────┘
+                                           ▼
+                           ┌─────────────────────────────────────────────┐
+                           │  gen-dba-script  (deterministic)            │
+                           │   • DEVELOPER reviews match keys / guards    │
+                           │   • writes nothing without --confirm-operations
+                           │   deploy.sql / verify.sql / dev-test.sql     │
+                           └───────────────┬─────────────────────────────┘
+                                           ▼  QA dev-test → deploy → verify → PR to gtm-legacy_gtm-sql
 
 
    internal HTS-update  ─► ┌───────────────────────────────────────────┐
@@ -142,7 +151,7 @@ A **suite** with clean handoffs and human gates — not one monolith.
 
 | Need | Right tool |
 |---|---|
-| Interpret a bulletin, propose a workbook | **Skill** (`csms-to-dba-script`) — local procedure, progressive disclosure |
+| Turn a story's attachment into a standardized workbook | **`build_workbook.py`** (committed adapter — per-table profile + per-story spec) |
 | Deterministic SQL from a workbook | **Skill + committed Python** (`gen-dba-script` / `gen_dba_script.py`) |
 | Query live table state / compute diffs | **`gtm-sql` MCP** (read-only `query`) |
 | Check shipped SQL / ADO scope | **GitHub + ADO MCP** (authoritative repos & work-item tree) |
@@ -155,11 +164,13 @@ A **suite** with clean handoffs and human gates — not one monolith.
 
 | Pipeline | Gate | Why |
 |---|---|---|
-| 1 | **Approve the proposed workbook** (control decisions, match keys, counts, the "unsure" list) before any SQL is generated | The match key + reconciliation are the highest-risk decisions |
+| 1 | **Developer reviews the proposed operations** (match keys, guards, counts, the "unsure" list) before any SQL is generated — `gen-dba-script` writes nothing without `--confirm-operations` | The match key + reconciliation are the highest-risk decisions |
 | 1 | **QA dev-test (transaction + rollback)** must pass before deploy | Row-level backstop against interpretation errors |
 | 1 | **Human approves the grounded complex side** even after DB queries | Country-scoping/period conventions include genuine judgment |
 | 2 | **Human approval before the prod-affecting (IMP) upload** | The IMP upload also updates Production |
 | all | **Never fabricate ungrounded data; never auto-deploy** | Automation detects + drafts; a person commits |
+
+**Role split:** the **SME/BA** provides the ADO story and the prepared Excel data; the **developer** reviews the operations at the gate before any SQL is generated or deployed.
 
 ---
 
@@ -167,9 +178,9 @@ A **suite** with clean handoffs and human gates — not one monolith.
 
 | Question | Authoritative source | NOT authoritative |
 |---|---|---|
-| What did the bulletin actually say? | The official CBP/GovDelivery bulletin | web-search snippets, third-party summaries |
+| What change is required? | The **ADO user story + its Excel data attachment** (the BA/analyst's prepared rows) | web-search snippets, third-party summaries, memory |
 | Is this change already shipped? | **ADO work-item tree** (Feature → sibling stories, state, linked PRs) + `tr/gtm-legacy_gtm-sql` (+ commit dates) | this repo's `samples/` — they are fixtures, never a deployment record |
-| What rows currently exist (for diffs)? | **`gtm-sql`** (live DB) | the bulletin/attachment |
+| What rows currently exist (for diffs)? | **`gtm-sql`** (live DB) | the attachment |
 | What's the operational upload procedure? | the SharePoint SOP (`How To Update US_ABI_Content…_V2.docx`) | memory/assumption |
 
 ---
@@ -179,9 +190,9 @@ A **suite** with clean handoffs and human gates — not one monolith.
 **Phase 0 — Align (this doc).** Agree the map, scope, and gates.
 
 **Phase 1 — Ground Pipeline 1 (highest value).**
-1. Connect **`gtm-sql`** (read-only) to the skill's environment.
-2. Teach the complex `tmdHTSAdditional` path to: query current state → derive the diff operations (DELETE / StartEffDate shifts / EndEffDate retirements); expand INSERTs by applying per-heading country lists × HTS-per-heading × period/format conventions; surface every judgment call for approval.
-3. **Validate on an unseen CSMS** (no pre-existing fixtures) — derive regulatory delta + DB diffs, author both workbooks fresh, generate, and compare to the shipped script. *That* comparison is meaningful.
+1. Connect **`gtm-sql`** (read-only) to the tooling's environment.
+2. Teach the complex `tmdHTSAdditional` path to: query current state → derive the diff operations (DELETE / StartEffDate shifts / EndEffDate retirements); expand INSERTs by applying per-heading country lists × HTS-per-heading × period/format conventions; surface every judgment call for developer approval.
+3. **Validate on an unseen story** (no pre-existing fixtures) — take its attachment + DB diffs, author both workbooks fresh, generate, and compare to the shipped script. *That* comparison is meaningful.
 
 **Phase 2 — Design & build Pipeline 2 (operational).**
 1. Resolve the API-vs-UI question for the Gateway/Maintenance pages (check the existing `Tariffs API Design Doc.docx` first).
@@ -196,18 +207,18 @@ A **suite** with clean handoffs and human gates — not one monolith.
 1. **Trigger emails:** do both `gtm_noreply` ("new hts update found: N") and `EZFTZSupport` ("file received") fire for a given HTS update? Which one carries/points to the file, and which drives the reply-all?
 2. **ABI pages — API or UI only?** Determines whether Pipeline 2 is a clean API integration or Playwright-driven UI automation. (Check `Dev_Kraken/AutoApply - Stacking/Tariffs API Design Doc.docx`.)
 3. **F110 record format** — confirm "chars 5–8 = HTS update number" and the "real record range vs Not-on-File/Expired" check, so file selection can be coded.
-4. **Reconciliation rules (Pipeline 1 complex):** how much of the country-scoping/period/dual-format logic is mechanizable vs. genuine analyst judgment that must stay behind the approval gate?
-5. **gtm-sql access for the skill's runtime** — environment(s) needed (`MSSQL_ENV`), and read-only confirmation.
+4. **Reconciliation rules (Pipeline 1 complex):** how much of the country-scoping/period/dual-format logic is mechanizable vs. genuine analyst judgment that must stay behind the developer approval gate?
+5. **gtm-sql access for the tooling's runtime** — environment(s) needed (`MSSQL_ENV`), and read-only confirmation.
 
 ---
 
 ## 9. Principles
 
-1. **Never fabricate ungrounded data.** If it's not in the source or confirmable in the DB, ask — don't invent.
+1. **Never fabricate ungrounded data.** If it's not in the story's attachment or confirmable in the DB, ask — don't invent.
 2. **Automation drafts; humans commit.** Detect + propose automatically; never auto-deploy, never auto-touch prod.
 3. **QA-first, always.** Dev-test (rollback) before deploy; QA AWS before IMP/Prod.
-4. **A suite, not a monolith.** Distinct pipelines, distinct skills, clean handoffs.
-5. **Right tool per step.** Skills for local procedures, MCP only for remote/stateful/authenticated access (gtm-sql, GitHub/ADO, M365, Playwright).
+4. **A suite, not a monolith.** Distinct pipelines, distinct tools, clean handoffs.
+5. **Right tool per step.** Committed Python for deterministic procedures, MCP only for remote/stateful/authenticated access (gtm-sql, GitHub/ADO, M365, Playwright).
 6. **Samples are fixtures, not facts.** Deployment truth lives in `gtm-legacy_gtm-sql` and the ADO work-item tree.
 7. **Validate honestly.** A test the model has already seen the answer to proves nothing — validate on unseen inputs.
 
@@ -227,11 +238,11 @@ Source-code trace of `fmgUSABIGateway.aspx` / `fmgUSABIMaintenance.aspx` (repos:
 | Layer | Tables | Filled by | Nature |
 |---|---|---|---|
 | **Base HTS schedule** | `tmdHTS`, `tmdHTSMaster`, `tmdHTSSPI`, `tmdHTSFee` | the `.ABI` pipeline (Pipeline 2) | The whole tariff schedule; high-volume, ~weekly |
-| **Regulatory overlays** | `tmdHTSAdditional`, `tmgGlobalCodes` | our DBA-script skills (Pipeline 1) | 232/301/etc. duties layered on base codes; event-driven |
+| **Regulatory overlays** | `tmdHTSAdditional`, `tmgGlobalCodes` | our DBA-script tooling (Pipeline 1) | 232/301/etc. duties layered on base codes; event-driven |
 
 The `.ABI` load writes the **base** schedule only — it emits **no SQL** and never touches the overlay tables.
 
-**So automating Pipeline 2 gives two payoffs:** (1) an **operational** win — the weekly base-HTS refresh becomes hands-off (retrieve via gateway DB/S3, apply via `LoadHTSUpdate(bytes)` per env, dedupe built in, no UI); and (2) it is the **upstream that grounds Pipeline 1** — the parsed changed-code set is the enumerated record source, and the refreshed base tables are the live state to diff against (the two things the complex `tmdHTSAdditional` side couldn't get from documents).
+**So automating Pipeline 2 gives two payoffs:** (1) an **operational** win — the weekly base-HTS refresh becomes hands-off (retrieve via gateway DB/S3, apply via `LoadHTSUpdate(bytes)` per env, dedupe built in, no UI); and (2) it is the **upstream that grounds Pipeline 1** — the parsed changed-code set is the enumerated record source, and the refreshed base tables are the live state to diff against (the two things the complex `tmdHTSAdditional` side couldn't get from the attachment alone).
 
 **Wiring:**
 
@@ -240,8 +251,8 @@ HSU N ─► [Pipeline 2: ALWAYS] retrieve .ABI (gateway DB / S3) → USABIConte
          → base HTS refreshed (tmdHTS, tmdHTSMaster, …)
          → does the changed set touch regulated headings (232/301/…)?
               no  → done, no SQL
-              yes → [Pipeline 1: HUMAN-GATED] ground overlay (changed set + fresh DB state)
-                     → propose tmdHTSAdditional / tmgGlobalCodes SQL → approve → deploy
+              yes → [Pipeline 1: HUMAN-GATED] story + attachment, ground overlay against fresh DB state
+                     → propose tmdHTSAdditional / tmgGlobalCodes SQL → developer review → deploy
 ```
 
 **Revised open questions (supersede §8 where overlapping):**

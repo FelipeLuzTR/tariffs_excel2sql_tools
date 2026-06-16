@@ -18,8 +18,8 @@ from getting the existence key or the verification wrong).
 
 **Where the workbook comes from.** The BA/SME provides the regulatory **story + a data
 spreadsheet** (the rows, counts, effective dates) — that is their job, and it's complete as-is.
-An **AI skill drafts the standardized workbook** from it (`csms-to-dba-script` from a CBP
-bulletin, or `build_workbook.py` from the BA's attachment — §2), and the **developer reviews**
+The **adapter (`build_workbook.py`) drafts the standardized workbook** from that attachment
+(§2), and the **developer reviews**
 the result at the approval gate (§3) before any SQL is written. You can also author/clone a
 workbook by hand (`samples/TEMPLATE.xlsx`).
 
@@ -66,8 +66,7 @@ This replaces "the Dev hand-writes the SQL." The Dev now **reviews** the AI's tr
 
 The pieces:
 
-- **`csms-to-dba-script`** (skill) — interprets a CBP bulletin → proposes a workbook (bulletin-driven changes).
-- **`build_workbook.py`** + a per-table profile + a per-story spec — turns a BA's raw delta attachment → a workbook (§2).
+- **`build_workbook.py`** + a per-table profile + a per-story spec — turns the BA's raw Excel attachment → a workbook (§2).
 - **`gen-dba-script`** (skill / `gen_dba_script.py`) — turns a workbook → deploy/verify/dev-test SQL, **behind the operations-approval gate** (§3).
 
 **End-to-end:** SME story + data → AI drafts workbook → AI generates SQL *(gate stops it)* → **Dev reviews + approves** → dev-test on QA → deploy → verify.

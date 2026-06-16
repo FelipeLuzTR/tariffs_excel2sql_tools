@@ -13,10 +13,10 @@ output is consistent, idempotent, and matches the validated patterns.
 ## When to use
 
 Use when a workbook already exists in the standardized format — control sheets
-`_Meta`, `_Columns`, `_Operations` plus action data tabs. To *produce* a workbook first:
-from a regulatory bulletin, use the `csms-to-dba-script` skill; from a BA's raw delta
-attachment, use the committed adapter `dba-script-generator/build_workbook.py` with a
-per-table profile + a per-story spec (README §2). The full workbook contract is in
+`_Meta`, `_Columns`, `_Operations` plus action data tabs. To *produce* a workbook first from
+a BA's raw Excel attachment (on the ADO story), use the committed adapter
+`dba-script-generator/build_workbook.py` with a per-table profile + a per-story spec
+(README §2). The full workbook contract is in
 `dba-script-generator/README.md` (§5) and `dba-script-generator/DESIGN.md`.
 
 ## Two trust tiers (read this first)
@@ -24,7 +24,7 @@ per-table profile + a per-story spec (README §2). The full workbook contract is
 A workbook has two tiers, scrutinized differently:
 
 - **Action-tab DATA** — the rows. BA/SME-sourced; assumed authoritative.
-- **`_Meta` / `_Columns` / `_Operations`** — the **engineering layer**: match keys, idempotency guards, operation order. When this was **AI-authored** (built from a bulletin, an adapter, or hand-rolled by an agent), it **MUST be human-reviewed before any SQL is written.** The **match key and guards are the highest-risk decisions**, and the dev-test does **not** catch a key that is "right for this dataset but wrong in principle" (the 4-vs-6-column trap). So the dev-test validates the data, not the interpretation.
+- **`_Meta` / `_Columns` / `_Operations`** — the **engineering layer**: match keys, idempotency guards, operation order. When this was **AI-authored** (built by the `build_workbook.py` adapter from the story's attachment, or hand-rolled by an agent), it **MUST be human-reviewed before any SQL is written.** The **match key and guards are the highest-risk decisions**, and the dev-test does **not** catch a key that is "right for this dataset but wrong in principle" (the 4-vs-6-column trap). So the dev-test validates the data, not the interpretation.
 
 ## How to run — review, THEN confirm
 
